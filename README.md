@@ -63,11 +63,12 @@ pinning `g2pk2`, the prebuilt `mecab-ko` wheel, and `mecab-ko-dic`; the crate
 embeds it, unpacks it beside the espeak data, and drives it as a JSON-lines
 server that returns each word's pronunciation as post-sandhi Hangul; the
 phone mapping runs in Rust (`src/korean.rs`, which documents the label set).
-The tagger and the one standard cross-word rule (27항) see the whole
-utterance; the sound-change table runs per word, because g2pk's regexes
-otherwise fire across spaces (안녕, 라디오 → [나디오]), which is not standard.
-**Needs `uv` on PATH**; the first call resolves the environment. Digits,
-Latin, hanja, and bare jamo are refused. The pins are part of `identity()`.
+The labels target connected speech: within a clause the sound changes apply
+across the spaces between words (못 만났어 [몬만나써], 할 것 [할껏]), as they
+do in real audio; punctuation, where speakers pause, splits the text into
+clauses that are phonemized separately (안녕, 라디오 keeps its ㄹ). **Needs
+`uv` on PATH**; the first call resolves the environment. Digits, Latin,
+hanja, and bare jamo are refused. The pins are part of `identity()`.
 
 ### Thai
 

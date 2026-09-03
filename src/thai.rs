@@ -54,7 +54,7 @@ struct Server {
 static SERVER_STATE: Mutex<Option<Result<Server, String>>> = Mutex::new(None);
 
 fn project_dir() -> Result<std::path::PathBuf, Error> {
-    let base = crate::data::cache_root()?.join("python-thai");
+    let base = crate::data::cache_root()?.join(format!("python-thai-{THAI_DIGEST}"));
     let marker = base.join(".unpacked");
     if !marker.exists() {
         std::fs::create_dir_all(&base)?;

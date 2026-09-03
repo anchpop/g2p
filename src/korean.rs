@@ -20,17 +20,17 @@
 //! the prebuilt `mecab-ko` wheel, and `mecab-ko-dic`; the crate embeds it,
 //! unpacks it beside the espeak data on first use, and drives
 //! `g2p_korean.py` as a JSON-lines server. Needs `uv` on PATH; the first
-//! call resolves the environment (network). The server returns each word's
-//! standard pronunciation as post-sandhi Hangul (값이 → 갑씨); this module
-//! maps that to phones.
+//! call resolves the environment (network unless uv's cache is warm). The
+//! server returns each word's pronunciation as post-sandhi Hangul (값이 →
+//! 갑씨); this module maps that to phones.
 //!
-//! g2pk applies its sound-change regexes across spaces when given a whole
-//! sentence, so 안녕, 라디오 becomes [나디오] and 사람들 놔두고 becomes
-//! [사람들롸두고] — those rules hold within a word, not across 어절 in
-//! standard pronunciation. The server therefore runs the tagger and the
-//! one cross-word rule that *is* standard (27항, 관형사형 ㄹ tensification:
-//! 할 것 [할껏]) over the whole utterance, then the sound-change table,
-//! liaison, and recomposition per word.
+//! The labels target real, connected speech. Within a clause the sound
+//! changes apply across the spaces between 어절 exactly as they do inside a
+//! word — 못 만났어 [몬만나써], 부엌 좀 [부억쫌], 할 것 [할껏] — because a
+//! speaker does not pause there and that is what the audio contains.
+//! Punctuation is where speakers pause, so the text is split into clauses
+//! at every punctuation mark and each clause is phonemized on its own:
+//! 안녕, 라디오 stays [안녕 라디오] instead of g2pk's whole-string [나디오].
 //!
 //! Label set (phonemic; what the model is trained to hear): lenis stops and
 //! affricate `k t p tɕ`, aspirated `kʰ tʰ pʰ tɕʰ`, tense `k͈ t͈ p͈ tɕ͈ s͈`,
@@ -63,8 +63,9 @@ pub const KOREAN_DIGEST: &str = env!("G2P_KOREAN_DIGEST");
 /// One utterance's labels.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Labels {
-    /// The standard pronunciation as post-sandhi Hangul, one token per
-    /// input word (값이 안 좋아 → "갑씨 안 조아"). Readable; not for scoring.
+    /// The pronunciation as post-sandhi Hangul, one token per input word,
+    /// clauses separated by ` | ` (값이 안 좋아, 라디오 → "갑씨 안 조아 |
+    /// 라디오"). Readable; not for scoring.
     pub raw: String,
     pub phonemes: Vec<String>,
     /// All `None`: Korean has no lexical stress.
@@ -82,7 +83,10 @@ struct Server {
 static SERVER_STATE: Mutex<Option<Result<Server, String>>> = Mutex::new(None);
 
 fn project_dir() -> Result<std::path::PathBuf, Error> {
-    let base = crate::data::cache_root()?.join("python-korean");
+    // Keyed on this project's own digest: the cache root is keyed on the
+    // espeak build, and a changed server script or lockfile must not reuse
+    // an unpack made from the old one.
+    let base = crate::data::cache_root()?.join(format!("python-korean-{KOREAN_DIGEST}"));
     let marker = base.join(".unpacked");
     if !marker.exists() {
         std::fs::create_dir_all(&base)?;
@@ -121,8 +125,9 @@ fn spawn() -> Result<Server, String> {
     })
 }
 
-/// Each word's standard pronunciation as post-sandhi Hangul, via the server.
-pub fn pronunciations(words: &[String]) -> Result<Vec<String>, Error> {
+/// Each word's pronunciation as post-sandhi Hangul, clause by clause, via
+/// the server.
+pub fn pronunciations(clauses: &[Vec<String>]) -> Result<Vec<Vec<String>>, Error> {
     let mut guard = SERVER_STATE.lock().unwrap_or_else(|p| p.into_inner());
     if guard.is_none() {
         *guard = Some(spawn());
@@ -131,7 +136,7 @@ pub fn pronunciations(words: &[String]) -> Result<Vec<String>, Error> {
         Ok(s) => s,
         Err(e) => return Err(Error::Backend(format!("korean: {e}"))),
     };
-    let request = serde_json::json!({ "words": words }).to_string();
+    let request = serde_json::json!({ "clauses": clauses }).to_string();
     let io_err = |e: std::io::Error| Error::Synth(format!("korean backend I/O: {e}"));
     server.stdin.write_all(request.as_bytes()).map_err(io_err)?;
     server.stdin.write_all(b"\n").map_err(io_err)?;
@@ -148,22 +153,24 @@ pub fn pronunciations(words: &[String]) -> Result<Vec<String>, Error> {
     if let Some(err) = reply.get("error").and_then(|v| v.as_str()) {
         return Err(Error::Synth(format!("g2pk2: {err}")));
     }
-    let prons: Vec<String> = reply
+    let prons: Vec<Vec<String>> = reply
         .get("prons")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .ok_or_else(|| Error::Synth("korean backend reply lacks prons".into()))?;
-    if prons.len() != words.len() {
+    let same_shape =
+        prons.len() == clauses.len() && prons.iter().zip(clauses).all(|(p, c)| p.len() == c.len());
+    if !same_shape {
         return Err(Error::Synth(format!(
-            "korean backend returned {} pronunciations for {} words",
-            prons.len(),
-            words.len()
+            "korean backend reply shape {:?} does not match the request {:?}",
+            prons.iter().map(Vec::len).collect::<Vec<_>>(),
+            clauses.iter().map(Vec::len).collect::<Vec<_>>()
         )));
     }
     Ok(prons)
 }
 
 // ---------------------------------------------------------------------------
-// Text → words
+// Text → clauses of words
 // ---------------------------------------------------------------------------
 
 fn is_hangul_syllable(c: char) -> bool {
@@ -177,41 +184,54 @@ fn is_jamo(c: char) -> bool {
         || ('\u{D7B0}'..='\u{D7FF}').contains(&c)
 }
 
-/// The Hangul words of `text`, punctuation stripped; or why the text is
-/// refused. Anything that is not a letter or digit (punctuation, symbols,
-/// music notes) is silent and ignored; every letter or digit that is not a
-/// Hangul syllable is refused, since g2pk would read it as a guess.
-pub fn words(text: &str) -> Result<Vec<String>, Error> {
+/// The Hangul words of `text` grouped into clauses, or why the text is
+/// refused. Any character that is neither a Hangul syllable nor whitespace
+/// nor a letter or digit — punctuation, symbols, music notes — ends the
+/// current clause and is otherwise silent. Every letter or digit that is
+/// not a Hangul syllable is refused, since g2pk would read it as a guess.
+pub fn clauses(text: &str) -> Result<Vec<Vec<String>>, Error> {
     let mut digits = String::new();
     let mut latin: Vec<String> = Vec::new();
     let mut other = String::new();
     let mut jamo = String::new();
-    let mut words = Vec::new();
-    for token in text.split_whitespace() {
-        let mut word = String::new();
-        let mut latin_run = String::new();
-        for c in token.chars() {
-            if is_hangul_syllable(c) {
-                word.push(c);
-            } else if c.is_ascii_digit() {
-                digits.push(c);
-            } else if c.is_ascii_alphabetic() {
-                latin_run.push(c);
-            } else if is_jamo(c) {
-                jamo.push(c);
-            } else if c.is_alphanumeric() {
-                other.push(c);
-            }
-            if !c.is_ascii_alphabetic() && !latin_run.is_empty() {
-                latin.push(std::mem::take(&mut latin_run));
-            }
-        }
-        if !latin_run.is_empty() {
-            latin.push(latin_run);
-        }
+    let mut clauses: Vec<Vec<String>> = Vec::new();
+    let mut clause: Vec<String> = Vec::new();
+    let mut word = String::new();
+    let mut latin_run = String::new();
+    let end_word = |word: &mut String, clause: &mut Vec<String>| {
         if !word.is_empty() {
-            words.push(word);
+            clause.push(std::mem::take(word));
         }
+    };
+    for c in text.chars() {
+        if !c.is_ascii_alphabetic() && !latin_run.is_empty() {
+            latin.push(std::mem::take(&mut latin_run));
+        }
+        if is_hangul_syllable(c) {
+            word.push(c);
+        } else if c.is_whitespace() {
+            end_word(&mut word, &mut clause);
+        } else if c.is_ascii_digit() {
+            digits.push(c);
+        } else if c.is_ascii_alphabetic() {
+            latin_run.push(c);
+        } else if is_jamo(c) {
+            jamo.push(c);
+        } else if c.is_alphanumeric() {
+            other.push(c);
+        } else {
+            end_word(&mut word, &mut clause);
+            if !clause.is_empty() {
+                clauses.push(std::mem::take(&mut clause));
+            }
+        }
+    }
+    if !latin_run.is_empty() {
+        latin.push(latin_run);
+    }
+    end_word(&mut word, &mut clause);
+    if !clause.is_empty() {
+        clauses.push(clause);
     }
     if !digits.is_empty() {
         return Err(Error::Unlabelable(format!("korean_digits:{digits}")));
@@ -230,7 +250,7 @@ pub fn words(text: &str) -> Result<Vec<String>, Error> {
             "korean_unsupported_char:{other}"
         )));
     }
-    Ok(words)
+    Ok(clauses)
 }
 
 // ---------------------------------------------------------------------------
@@ -283,10 +303,11 @@ fn coda(index: usize) -> Option<&'static str> {
     })
 }
 
-/// Phones of one word's post-sandhi Hangul.
-pub fn word_phones(pron: &str) -> Result<Vec<String>, Error> {
+/// Phones of one word's post-sandhi Hangul. `after_l` says whether the
+/// previous word in the clause ended in ㄹ, so a clause like 설날 written as
+/// two words still gets the geminate lateral.
+fn word_phones(pron: &str, mut after_l: bool) -> Result<(Vec<String>, bool), Error> {
     let mut out: Vec<String> = Vec::new();
-    let mut after_l = false;
     for c in pron.chars() {
         if !is_hangul_syllable(c) {
             return Err(Error::Synth(format!(
@@ -315,19 +336,28 @@ pub fn word_phones(pron: &str) -> Result<Vec<String>, Error> {
         }
         after_l = coda == "l";
     }
-    Ok(out)
+    Ok((out, after_l))
 }
 
-/// Labels from the words and their pronunciations.
-pub fn labels(prons: &[String]) -> Result<Labels, Error> {
+/// Labels from the clauses' pronunciations.
+pub fn labels(prons: &[Vec<String>]) -> Result<Labels, Error> {
     let mut labels = Labels {
-        raw: prons.join(" "),
+        raw: prons
+            .iter()
+            .map(|c| c.join(" "))
+            .collect::<Vec<_>>()
+            .join(" | "),
         ..Labels::default()
     };
-    for pron in prons {
-        let start = labels.phonemes.len();
-        labels.phonemes.extend(word_phones(pron)?);
-        labels.word_spans.push((start, labels.phonemes.len()));
+    for clause in prons {
+        let mut after_l = false;
+        for pron in clause {
+            let start = labels.phonemes.len();
+            let (phones, ends_in_l) = word_phones(pron, after_l)?;
+            after_l = ends_in_l;
+            labels.phonemes.extend(phones);
+            labels.word_spans.push((start, labels.phonemes.len()));
+        }
     }
     labels.stress = vec![crate::Stress::None; labels.phonemes.len()];
     Ok(labels)
@@ -335,20 +365,24 @@ pub fn labels(prons: &[String]) -> Result<Labels, Error> {
 
 /// Label one utterance.
 pub fn phonemize(text: &str) -> Result<Labels, Error> {
-    let words = words(text)?;
-    if words.is_empty() {
+    let clauses = clauses(text)?;
+    if clauses.is_empty() {
         return Ok(Labels::default());
     }
-    labels(&pronunciations(&words)?)
+    labels(&pronunciations(&clauses)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn words(s: &str) -> Vec<String> {
+        s.split(' ').map(str::to_string).collect()
+    }
+
     #[test]
     fn maps_post_sandhi_hangul_to_phones() {
-        let l = labels(&["갑씨".into(), "실라".into(), "꼰닙".into(), "의사".into()]).unwrap();
+        let l = labels(&[words("갑씨 실라"), words("꼰닙 의사")]).unwrap();
         assert_eq!(
             l.phonemes,
             [
@@ -358,28 +392,37 @@ mod tests {
         );
         assert_eq!(l.word_spans, [(0, 5), (5, 10), (10, 16), (16, 20)]);
         assert!(l.stress.iter().all(|s| *s == crate::Stress::None));
-        assert_eq!(l.raw, "갑씨 실라 꼰닙 의사");
+        assert_eq!(l.raw, "갑씨 실라 | 꼰닙 의사");
     }
 
     #[test]
-    fn tap_between_vowels_lateral_in_coda() {
-        assert_eq!(word_phones("라디오").unwrap(), ["ɾ", "a", "t", "i", "o"]);
-        assert_eq!(word_phones("물").unwrap(), ["m", "u", "l"]);
-        assert_eq!(word_phones("설랄").unwrap(), ["s", "ʌ", "l", "l", "a", "l"]);
+    fn tap_between_vowels_lateral_in_coda_and_across_words() {
+        let phones = |s: &str| word_phones(s, false).unwrap().0;
+        assert_eq!(phones("라디오"), ["ɾ", "a", "t", "i", "o"]);
+        assert_eq!(phones("물"), ["m", "u", "l"]);
+        assert_eq!(phones("설랄"), ["s", "ʌ", "l", "l", "a", "l"]);
+        // 잘 래다 (from 잘 내다 in connected speech): the ㄹ that starts the
+        // second word is the geminate's second half.
+        let l = labels(&[words("잘 래다")]).unwrap();
+        assert_eq!(l.phonemes, ["tɕ", "a", "l", "l", "e", "t", "a"]);
     }
 
     #[test]
     fn rejects_unneutralized_codas() {
-        assert!(matches!(word_phones("값"), Err(Error::Synth(_))));
+        assert!(matches!(word_phones("값", false), Err(Error::Synth(_))));
     }
 
     #[test]
-    fn splits_words_and_strips_punctuation() {
+    fn splits_clauses_at_punctuation() {
         assert_eq!(
-            words("“안녕, 라디오!” 뭐라고요?").unwrap(),
-            ["안녕", "라디오", "뭐라고요"]
+            clauses("“안녕, 라디오!” 뭐라고요?").unwrap(),
+            [words("안녕"), words("라디오"), words("뭐라고요")]
         );
-        assert!(words("...").unwrap().is_empty());
+        assert_eq!(
+            clauses("못 만났어... 부엌 좀 봐").unwrap(),
+            [words("못 만났어"), words("부엌 좀 봐")]
+        );
+        assert!(clauses("...").unwrap().is_empty());
     }
 
     #[test]
@@ -394,7 +437,7 @@ mod tests {
             ("ㄴ 것 같다", "korean_jamo:ㄴ"),
             ("韓國 사람", "korean_unsupported_char:韓國"),
         ] {
-            match words(text) {
+            match clauses(text) {
                 Err(Error::Unlabelable(r)) => assert_eq!(r, reason, "{text}"),
                 other => panic!("{text}: {other:?}"),
             }
@@ -404,7 +447,9 @@ mod tests {
     #[test]
     #[ignore = "needs uv on PATH and network on first run"]
     fn runs_the_python_backend() {
-        let l = phonemize("할 것을 꽃잎 위에 놓았어요.").unwrap();
-        assert_eq!(l.raw, "할 꺼슬 꼰닙 위에 노아써요");
+        // Connected speech inside the clause (할 것 → 할 껏, 못 만났어 →
+        // 몬 만나써); the comma blocks it (라디오 keeps its ㄹ).
+        let l = phonemize("할 것을 못 만났어, 라디오!").unwrap();
+        assert_eq!(l.raw, "할 꺼슬 몬 만나써 | 라디오");
     }
 }

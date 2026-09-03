@@ -1,24 +1,27 @@
 """Korean G2P server for the g2p crate.
 
-Reads one JSON request per line on stdin — {"words": ["...", ...]}, the
-space-delimited Hangul words (어절) of one utterance, Hangul syllables only —
-and writes one JSON response per line: {"prons": [...]} with each word's
-standard pronunciation as post-sandhi Hangul (g2pk's output form: 값이 →
-갑씨, 꽃잎 → 꼰닙), or {"error": "..."}. The crate maps that Hangul to phones
-itself (src/korean.rs); this process only runs the parts that live in Python.
+Reads one JSON request per line on stdin — {"clauses": [["...", ...], ...]},
+one utterance as clauses (runs of Hangul words between punctuation marks),
+each a list of space-delimited Hangul words (어절), Hangul syllables only —
+and writes one JSON response per line: {"prons": [[...], ...]} with each
+word's pronunciation as post-sandhi Hangul (g2pk's output form: 값이 → 갑씨,
+꽃잎 → 꼰닙), same shape as the request, or {"error": "..."}. The crate maps
+that Hangul to phones itself (src/korean.rs); this process only runs the
+parts that live in Python.
 
-g2pk's pipeline is run in two halves. Morphological tagging (mecab-ko over
-the whole utterance) and the "special" rules — including 표준 발음법 27항,
-the tensification after a 관형사형 ㄹ that crosses the space in 할 것 [할껏]
-— see the whole utterance, because they need context. The sound-change
-table, liaison, and recomposition then run per word. Run on the whole
-utterance those regexes also fire across spaces and turn 안녕, 라디오 into
-[나디오] and 사람들 놔두고 into [사람들롸두고], which is not standard
-pronunciation (those rules hold within a word); per word they cannot.
+Each clause goes through g2pk's pipeline as one string, so its sound-change
+rules apply across the spaces inside the clause: 못 만났어 → [몬만나써],
+부엌 좀 → [부억쫌], 할 것 → [할껏]. That is what connected speech contains —
+a speaker does not pause between 어절 — and the labels target real audio.
+Punctuation is where speakers do pause, so a clause boundary blocks the
+rules: 안녕, 라디오 stays [안녕 라디오] rather than becoming [나디오].
+Morphological tagging (mecab-ko) sees the whole clause too.
 
 g2pk2 transliterates English words via CMUdict, which it downloads through
 nltk at import time. The crate never sends Latin text (it refuses it), so
-the download is stubbed out here rather than fetched.
+the download is stubbed out here rather than fetched. Its number-reading
+and idiom steps are likewise never reached by digits (refused), and the
+idiom table is applied once per clause.
 
 `identity` prints the resolved package versions so the crate can stamp its
 output with them.
@@ -69,7 +72,9 @@ class Phonemizer:
                     a, b = line.split("===")
                     self.idioms.append((a, b))
 
-    def prons(self, words: list[str]) -> list[str]:
+    def clause(self, words: list[str]) -> list[str]:
+        """g2pk's steps 1 and 3–9 (English and number conversion skipped) on
+        the clause as one string; the output keeps one token per word."""
         text = " ".join(words)
         for a, b in self.idioms:
             text = re.sub(a, b, text)
@@ -78,16 +83,17 @@ class Phonemizer:
         for func in self.special:
             inp = func(inp, False, False)
         inp = re.sub("/[PJEB]", "", inp)
-        out = []
-        for word in inp.split(" "):
-            for str1, str2, _ in self.g2p.table:
-                word = re.sub(str1, str2, word)
-            for func in self.link:
-                word = func(word, False, False)
-            out.append(self.compose(word))
+        for str1, str2, _ in self.g2p.table:
+            inp = re.sub(str1, str2, inp)
+        for func in self.link:
+            inp = func(inp, False, False)
+        out = self.compose(inp).split(" ")
         if len(out) != len(words):
             raise ValueError(f"word count changed: {words!r} -> {out!r}")
         return out
+
+    def prons(self, clauses: list[list[str]]) -> list[list[str]]:
+        return [self.clause(words) for words in clauses]
 
 
 def main() -> None:
@@ -107,8 +113,8 @@ def main() -> None:
         if not line:
             continue
         try:
-            words = json.loads(line)["words"]
-            out.write(json.dumps({"prons": phonemizer.prons(words)}, ensure_ascii=False) + "\n")
+            clauses = json.loads(line)["clauses"]
+            out.write(json.dumps({"prons": phonemizer.prons(clauses)}, ensure_ascii=False) + "\n")
         except Exception as exc:  # noqa: BLE001 — every failure must answer the request
             out.write(json.dumps({"error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False) + "\n")
         out.flush()
