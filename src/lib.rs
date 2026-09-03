@@ -22,13 +22,15 @@
 //!
 //! Not every language is an espeak language. [`label_source`] is the one
 //! table of where each language's labels come from, and [`phonemize_lang`]
-//! dispatches on it: espeak for most, the built-in [`hindi`] chain for Hindi
-//! (espeak's `hi` voice is never used), and a refusal for languages whose
-//! labels come from Python backends this crate does not run.
+//! dispatches on it: espeak for most, the built-in [`hindi`] and [`mandarin`]
+//! chains for Hindi and Simplified Mandarin (espeak's `hi`/`cmn` voices are
+//! never used), and a refusal for languages whose labels come from Python
+//! backends this crate does not run.
 
 mod data;
 mod ffi;
 pub mod hindi;
+pub mod mandarin;
 pub mod parse;
 
 pub use hindi::{Canon as HindiCanon, Syllable};
@@ -92,6 +94,11 @@ pub struct Phonemized {
     /// compute them — Hindi. Empty for espeak languages.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub syllables: Vec<Syllable>,
+    /// Lexical tone per phoneme for tone languages — Mandarin: the tone
+    /// number (1–5) on each syllable's tone-bearing phone, `None` elsewhere.
+    /// Parallel to `phonemes`; empty for languages without tone labels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tone: Vec<Option<u8>>,
 }
 
 /// Phonemize `text` with an espeak voice (e.g. `fr-fr`, `en-us`, `pt-br`,
@@ -113,6 +120,7 @@ pub fn phonemize(text: &str, voice: &str) -> Result<Phonemized, Error> {
         stress,
         word_spans,
         syllables: Vec::new(),
+        tone: Vec::new(),
     })
 }
 
@@ -145,6 +153,8 @@ pub enum LabelSource {
     Espeak(&'static str),
     /// The ported `schwa-stress-hin` chain ([`hindi`]).
     Hindi,
+    /// The ported g2pM + pinyin-to-IPA chain ([`mandarin`]).
+    Mandarin,
     /// A Python backend lexide runs outside this crate, by provider name.
     /// Not callable from here yet.
     ExternalBackend(&'static str),
@@ -156,8 +166,8 @@ pub fn label_source(lang: &str) -> Option<LabelSource> {
     use LabelSource::*;
     Some(match lang {
         "hin" => Hindi,
+        "zho-hans" => Mandarin,
         "jpn" => ExternalBackend("pyopenjtalk"),
-        "zho-hans" => ExternalBackend("g2pm-ipa"),
         "tha" => ExternalBackend("vachana-thai"),
         // Model languages labeled from espeak. `pt-br`, not `pt`: European
         // Portuguese targets against Brazilian audio measured 41% median
@@ -220,10 +230,29 @@ pub fn phonemize_lang_with(lang: &str, text: &str, canon: HindiCanon) -> Result<
     match label_source(lang) {
         Some(LabelSource::Espeak(voice)) => phonemize(text, voice),
         Some(LabelSource::Hindi) => Ok(hindi_phonemized(hindi::phonemize(text, canon)?)),
+        Some(LabelSource::Mandarin) => Ok(mandarin_phonemized(mandarin::phonemize(text)?)),
         Some(LabelSource::ExternalBackend(_)) | None => {
             Err(Error::UnsupportedLanguage(lang.to_string()))
         }
     }
+}
+
+/// Flatten per-syllable Mandarin labels into the common shape: one word span
+/// per syllable, no stress, tone on the bearing phone, and pinyin as `raw`.
+fn mandarin_phonemized(syllables: Vec<mandarin::Syllable>) -> Phonemized {
+    let mut out = Phonemized::default();
+    let mut pinyin = Vec::with_capacity(syllables.len());
+    for s in syllables {
+        let start = out.phonemes.len();
+        out.stress
+            .extend(std::iter::repeat_n(Stress::None, s.phonemes.len()));
+        out.tone.extend(s.tone);
+        out.phonemes.extend(s.phonemes);
+        out.word_spans.push((start, out.phonemes.len()));
+        pinyin.push(s.pinyin);
+    }
+    out.raw = pinyin.join(" ");
+    out
 }
 
 /// Flatten per-word Hindi labels into the common shape.

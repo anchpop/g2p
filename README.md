@@ -42,7 +42,21 @@ nothing downstream can tell.
 |---|---|
 | eng deu fra ita por spa rus (+ kor, unvalidated, and lexide's Pimsleur-era languages) | the espeak fork, one voice each |
 | hin | the built-in Hindi chain (below) |
-| jpn zho-hans tha | Python backends lexide runs outside this crate; `phonemize_lang` refuses them |
+| zho-hans | the built-in Mandarin chain (below) |
+| jpn tha | Python backends lexide runs outside this crate; `phonemize_lang` refuses them |
+
+### Mandarin
+
+espeak's `cmn` voice is not used. `src/mandarin` is a port of g2pM
+(kakaobrain, MIT): a CEDICT digest gives each character its readings and a
+small BiLSTM picks the reading for the 791 polyphonic characters from
+sentence context; weights and dictionary are embedded (~1.7 MB). Pinyin
+becomes IPA through the `pinyin_to_ipa` package's tables, precomputed for
+every syllable g2pM can emit. Labels carry a tone number on each syllable's
+tone-bearing phone. Output matches lexide's Python chain on every one of the
+18,357 corpus sentences both can label; text with digits, Latin letters, or
+characters outside the dictionary is refused rather than labeled with a hole
+(the Python chain silently dropped such characters, 2,694 corpus rows).
 
 ### Hindi
 

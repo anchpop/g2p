@@ -48,6 +48,8 @@ enum Response {
         word_spans: Vec<(usize, usize)>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         syllables: Vec<g2p::Syllable>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        tone: Vec<Option<u8>>,
     },
     Err {
         error: String,
@@ -65,6 +67,7 @@ impl From<Result<g2p::Phonemized, g2p::Error>> for Response {
                 stress: p.stress.iter().map(|s| s.code()).collect(),
                 word_spans: p.word_spans,
                 syllables: p.syllables,
+                tone: p.tone,
             },
             Err(e) => Response::Err {
                 unlabelable: match &e {
