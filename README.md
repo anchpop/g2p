@@ -43,7 +43,23 @@ nothing downstream can tell.
 | eng deu fra ita por spa rus (+ kor, unvalidated, and lexide's Pimsleur-era languages) | the espeak fork, one voice each |
 | hin | the built-in Hindi chain (below) |
 | zho-hans | the built-in Mandarin chain (below) |
-| jpn tha | Python backends lexide runs outside this crate; `phonemize_lang` refuses them |
+| jpn | OpenJTalk via `jpreprocess` (below) |
+| tha | a Python backend lexide runs outside this crate; `phonemize_lang` refuses it |
+
+### Japanese
+
+espeak's `ja` voice is not used. `src/japanese` runs OpenJTalk's text front
+end through [jpreprocess](https://github.com/jpreprocess/jpreprocess), a
+Rust rewrite with the NAIST dictionary bundled (downloaded at build time and
+embedded; the binary grows by ~85 MB), then applies lexide's label stage:
+OpenJTalk phones to IPA, the sokuon closure as length on the following
+obstruent, and a Tokyo pitch level per mora from each accent phrase's nucleus
+and mora count. Accent is withheld (phones kept) for fragments whose first
+content word is a particle, auxiliary, or suffix, or when the parse is
+self-inconsistent. Against pyopenjtalk on the lexide corpus, 99.2% of
+sentences label identically; the rest differ in readings of Latin
+abbreviations and digit-plus-counter words (ケイ vs ケー, 年 vs とし) and in
+accent-phrase chaining.
 
 ### Mandarin
 

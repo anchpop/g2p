@@ -16,8 +16,19 @@ path = "src/lib.rs"
 name = "g2p"
 path = "src/bin/g2p.rs"
 
+[features]
+default = ["japanese"]
+# Japanese labels via jpreprocess + the bundled NAIST dictionary (~85 MB in
+# the binary). Without it `phonemize_lang("jpn", …)` is an
+# `Error::UnsupportedLanguage`.
+japanese = ["dep:jpreprocess"]
+
 [dependencies]
 dirs = "6"
+# OpenJTalk rewritten in Rust, with the NAIST dictionary built in: the
+# Japanese label source (see src/japanese). Optional because the embedded
+# dictionary adds ~85 MB to the binary.
+jpreprocess = { version = "0.15", features = ["naist-jdic"], optional = true }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -22,18 +22,34 @@
 //!
 //! Not every language is an espeak language. [`label_source`] is the one
 //! table of where each language's labels come from, and [`phonemize_lang`]
-//! dispatches on it: espeak for most, the built-in [`hindi`] and [`mandarin`]
-//! chains for Hindi and Simplified Mandarin (espeak's `hi`/`cmn` voices are
-//! never used), and a refusal for languages whose labels come from Python
-//! backends this crate does not run.
+//! dispatches on it: espeak for most, the built-in [`hindi`], [`mandarin`],
+//! and [`japanese`] chains for Hindi, Simplified Mandarin, and Japanese
+//! (espeak's `hi`/`cmn`/`ja` voices are never used), and a refusal for Thai,
+//! whose labels come from a Python backend this crate does not run.
 
 mod data;
 mod ffi;
 pub mod hindi;
+#[cfg(feature = "japanese")]
+pub mod japanese;
 pub mod mandarin;
 pub mod parse;
 
 pub use hindi::{Canon as HindiCanon, Syllable};
+
+/// Tokyo pitch-accent factor for one mora-bearing phone (Japanese).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Pitch {
+    /// 1-based accent phrase index within the utterance.
+    pub phrase: u8,
+    /// 1-based mora index within the accent phrase.
+    pub mora: u8,
+    pub phrase_moras: u8,
+    /// Accent nucleus mora (0 = heiban), the NJD value.
+    pub nucleus: u8,
+    /// Realized level: 0 = L, 1 = H. The trained target.
+    pub level: u8,
+}
 pub use parse::{Parsed, Stress};
 
 use std::cell::RefCell;
@@ -99,6 +115,14 @@ pub struct Phonemized {
     /// Parallel to `phonemes`; empty for languages without tone labels.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tone: Vec<Option<u8>>,
+    /// Tokyo pitch-accent factor per phoneme — Japanese. Parallel to
+    /// `phonemes`; empty when withheld or for other languages.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pitch: Vec<Option<Pitch>>,
+    /// Why `pitch` is empty although the language has accent labels
+    /// (Japanese): the phones are fine, the accent factor is not trusted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent_withheld: Option<String>,
 }
 
 /// Phonemize `text` with an espeak voice (e.g. `fr-fr`, `en-us`, `pt-br`,
@@ -121,6 +145,8 @@ pub fn phonemize(text: &str, voice: &str) -> Result<Phonemized, Error> {
         word_spans,
         syllables: Vec::new(),
         tone: Vec::new(),
+        pitch: Vec::new(),
+        accent_withheld: None,
     })
 }
 
@@ -155,6 +181,8 @@ pub enum LabelSource {
     Hindi,
     /// The ported g2pM + pinyin-to-IPA chain ([`mandarin`]).
     Mandarin,
+    /// OpenJTalk via `jpreprocess` ([`japanese`]).
+    Japanese,
     /// A Python backend lexide runs outside this crate, by provider name.
     /// Not callable from here yet.
     ExternalBackend(&'static str),
@@ -167,7 +195,7 @@ pub fn label_source(lang: &str) -> Option<LabelSource> {
     Some(match lang {
         "hin" => Hindi,
         "zho-hans" => Mandarin,
-        "jpn" => ExternalBackend("pyopenjtalk"),
+        "jpn" => Japanese,
         "tha" => ExternalBackend("vachana-thai"),
         // Model languages labeled from espeak. `pt-br`, not `pt`: European
         // Portuguese targets against Brazilian audio measured 41% median
@@ -231,9 +259,30 @@ pub fn phonemize_lang_with(lang: &str, text: &str, canon: HindiCanon) -> Result<
         Some(LabelSource::Espeak(voice)) => phonemize(text, voice),
         Some(LabelSource::Hindi) => Ok(hindi_phonemized(hindi::phonemize(text, canon)?)),
         Some(LabelSource::Mandarin) => Ok(mandarin_phonemized(mandarin::phonemize(text)?)),
+        #[cfg(feature = "japanese")]
+        Some(LabelSource::Japanese) => Ok(japanese_phonemized(japanese::phonemize(text)?)),
+        #[cfg(not(feature = "japanese"))]
+        Some(LabelSource::Japanese) => Err(Error::UnsupportedLanguage(lang.to_string())),
         Some(LabelSource::ExternalBackend(_)) | None => {
             Err(Error::UnsupportedLanguage(lang.to_string()))
         }
+    }
+}
+
+/// Japanese labels in the common shape: one word span for the utterance
+/// (OpenJTalk's word boundaries are not part of the label), no stress, the
+/// pitch factor, and OpenJTalk's phone string as `raw`.
+#[cfg(feature = "japanese")]
+fn japanese_phonemized(labels: japanese::Labels) -> Phonemized {
+    let n = labels.phonemes.len();
+    Phonemized {
+        raw: labels.native_phones.join(" "),
+        stress: vec![Stress::None; n],
+        word_spans: if n == 0 { Vec::new() } else { vec![(0, n)] },
+        phonemes: labels.phonemes,
+        pitch: labels.pitch,
+        accent_withheld: labels.accent_withheld,
+        ..Phonemized::default()
     }
 }
 

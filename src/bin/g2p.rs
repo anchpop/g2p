@@ -50,6 +50,10 @@ enum Response {
         syllables: Vec<g2p::Syllable>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         tone: Vec<Option<u8>>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        pitch: Vec<Option<g2p::Pitch>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        accent_withheld: Option<String>,
     },
     Err {
         error: String,
@@ -68,6 +72,8 @@ impl From<Result<g2p::Phonemized, g2p::Error>> for Response {
                 word_spans: p.word_spans,
                 syllables: p.syllables,
                 tone: p.tone,
+                pitch: p.pitch,
+                accent_withheld: p.accent_withheld,
             },
             Err(e) => Response::Err {
                 unlabelable: match &e {
