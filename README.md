@@ -30,6 +30,41 @@ shortcut, which skips the pitch/length passes and differs on tone languages.
 `identity()` returns a string keyed on a digest of every fork source file that
 affects output. Stamp persisted phoneme data with it.
 
+## Languages
+
+`label_source(lang)` is the one table, shared by yap and lexide, of where each
+language's phoneme labels come from. Which G2P a language may use is a
+correctness constraint, not a preference: targets from a different source
+than the model's training labels disagree about the phoneme inventory, and
+nothing downstream can tell.
+
+| languages | source |
+|---|---|
+| eng deu fra ita por spa rus (+ kor, unvalidated, and lexide's Pimsleur-era languages) | the espeak fork, one voice each |
+| hin | the built-in Hindi chain (below) |
+| jpn zho-hans tha | Python backends lexide runs outside this crate; `phonemize_lang` refuses them |
+
+### Hindi
+
+espeak's `hi` voice is not used. `src/hindi` is a port of lexide's
+`schwa-stress-hin` chain: Devanagari → phone units, the ACL 2020
+logistic-regression schwa-deletion classifier (aryamanarora/schwa-deletion,
+MIT; weights embedded), a unit → IPA map, and Roy's (2017) surface
+syllable-weight stress rules with syllable spans.
+
+Two label conventions, chosen with `HindiCanon`:
+
+- `Legacy` is byte-identical to the Python chain on the entire lexide corpus
+  (13,086 sentences: phonemes, stress, syllables). It is what the deployed
+  pronunciation model was trained on, so it is what yap scores against.
+- `Current` adds the corrections from a 2026-09-02 audit against Wiktionary
+  and the schwa repo's gold lists: `/ə/` beside `/ɦ/` is `[ɛ]` (शहर, कहना,
+  बहन; यह/वह are `[jeː]`/`[ʋoː]`), anusvara before velars is `ŋ`, ज्ञ is
+  `[ɡj]`, word-final short ɪ/ʊ are `iː`/`uː`, and a schwa deletion that would
+  leave an unpronounceable consonant run (दुश्मनों → `ʃmn`) is undone. Text
+  with digits or Latin letters is refused (`Error::Unlabelable`) rather than
+  labeled with a hole where the audio has speech.
+
 ## Rust
 
 ```toml
@@ -37,8 +72,10 @@ g2p = { git = "https://github.com/anchpop/g2p", rev = "..." }
 ```
 
 ```rust
-let p = g2p::phonemize("on est", "fr-fr")?;
+let p = g2p::phonemize("on est", "fr-fr")?;          // by espeak voice
 assert_eq!(p.phonemes, ["ɔ̃", "n", "ɛ"]);
+let h = g2p::phonemize_lang("hin", "यह शहर")?;        // by language, current canon
+let l = g2p::phonemize_lang_with("hin", "यह शहर", g2p::HindiCanon::Legacy)?;
 ```
 
 Voices are espeak voice names (`fr-fr`, `en-us`, `pt-br`, `cmn`, `ru`, …),
@@ -49,15 +86,18 @@ resolved the way the CLI's `-v` resolves them. Calls are thread-safe
 
 ```
 cargo install --git https://github.com/anchpop/g2p --locked
-g2p fr-fr "on est"      # one utterance → JSON
-g2p identity            # build identity
-g2p serve               # JSON lines on stdin/stdout, one utterance per line
+g2p fr-fr "on est"           # one utterance → JSON
+g2p --lang hin "यह शहर"      # by language
+g2p identity                 # build identity
+g2p serve                    # JSON lines on stdin/stdout, one utterance per line
 ```
 
 `serve` is how lexide's Python uses it: keep one process running and stream
-`{"text": ..., "voice": ...}` requests through it. Each line is exactly one
-utterance, so the clause-versus-line framing ambiguity of `espeak-ng --stdin`
-cannot occur.
+`{"text": ..., "voice": ...}` or `{"text": ..., "lang": ..., "canon": ...}`
+requests through it. Each line is exactly one utterance, so the
+clause-versus-line framing ambiguity of `espeak-ng --stdin` cannot occur.
+Responses carry `syllables` when the backend computes them, and a refusal
+comes back as `{"error": ..., "unlabelable": "reason:detail"}`.
 
 ## Building
 

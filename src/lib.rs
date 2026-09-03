@@ -19,11 +19,19 @@
 //! the phoneme sequence the lexide pronunciation model was trained on (see
 //! [`parse`]). Callers that score audio must use the tokenized form; the two
 //! must never be mixed.
+//!
+//! Not every language is an espeak language. [`label_source`] is the one
+//! table of where each language's labels come from, and [`phonemize_lang`]
+//! dispatches on it: espeak for most, the built-in [`hindi`] chain for Hindi
+//! (espeak's `hi` voice is never used), and a refusal for languages whose
+//! labels come from Python backends this crate does not run.
 
 mod data;
 mod ffi;
+pub mod hindi;
 pub mod parse;
 
+pub use hindi::{Canon as HindiCanon, Syllable};
 pub use parse::{Parsed, Stress};
 
 use std::cell::RefCell;
@@ -59,6 +67,13 @@ pub enum Error {
     Synth(String),
     #[error("text contains a NUL byte")]
     NulByte,
+    /// The backend refuses to label this text rather than emit labels that
+    /// silently omit part of what is spoken (e.g. Hindi text with digits).
+    /// The string is a stable `reason:detail` code.
+    #[error("cannot label this text: {0}")]
+    Unlabelable(String),
+    #[error("no G2P backend for language {0:?}")]
+    UnsupportedLanguage(String),
 }
 
 /// Phonemization of one utterance.
@@ -73,6 +88,10 @@ pub struct Phonemized {
     pub stress: Vec<Stress>,
     /// `[start, end)` ranges into `phonemes`, one per word espeak emitted.
     pub word_spans: Vec<(usize, usize)>,
+    /// Syllable spans (absolute indices into `phonemes`) for backends that
+    /// compute them — Hindi. Empty for espeak languages.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub syllables: Vec<Syllable>,
 }
 
 /// Phonemize `text` with an espeak voice (e.g. `fr-fr`, `en-us`, `pt-br`,
@@ -93,6 +112,7 @@ pub fn phonemize(text: &str, voice: &str) -> Result<Phonemized, Error> {
         phonemes,
         stress,
         word_spans,
+        syllables: Vec::new(),
     })
 }
 
@@ -111,6 +131,121 @@ pub fn phonemize_raw(text: &str, voice: &str) -> Result<String, Error> {
         .flat_map(|c| c.split_whitespace())
         .collect::<Vec<_>>()
         .join(" "))
+}
+
+/// Where a language's phoneme labels come from. One table for both yap and
+/// lexide: which G2P a language may use is a correctness constraint, not a
+/// preference — targets from a different source than the model's training
+/// labels disagree about the phoneme inventory, and nothing downstream can
+/// tell (Hindi scored against espeak `hi` measured as the worst language by
+/// a wide margin before this was understood).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabelSource {
+    /// Our espeak-ng fork, with this voice.
+    Espeak(&'static str),
+    /// The ported `schwa-stress-hin` chain ([`hindi`]).
+    Hindi,
+    /// A Python backend lexide runs outside this crate, by provider name.
+    /// Not callable from here yet.
+    ExternalBackend(&'static str),
+}
+
+/// Label source for a language code (ISO 639-3, `zho-hans` for Simplified
+/// Mandarin). `None` for languages no consumer labels.
+pub fn label_source(lang: &str) -> Option<LabelSource> {
+    use LabelSource::*;
+    Some(match lang {
+        "hin" => Hindi,
+        "jpn" => ExternalBackend("pyopenjtalk"),
+        "zho-hans" => ExternalBackend("g2pm-ipa"),
+        "tha" => ExternalBackend("vachana-thai"),
+        // Model languages labeled from espeak. `pt-br`, not `pt`: European
+        // Portuguese targets against Brazilian audio measured 41% median
+        // phoneme distance where `pt-br` measured 31%.
+        "eng" => Espeak("en-us"),
+        "deu" => Espeak("de"),
+        "fra" => Espeak("fr-fr"),
+        "ita" => Espeak("it"),
+        "por" => Espeak("pt-br"),
+        "spa" => Espeak("es"),
+        "rus" => Espeak("ru"),
+        // Korean uses espeak because nothing better is wired up, not because
+        // espeak has been checked against a Korean corpus. Validate before
+        // trusting.
+        "kor" => Espeak("ko"),
+        // Pimsleur-era languages in lexide's corpus, espeak-labeled and not
+        // through a backend audit.
+        "sqi" => Espeak("sq"),
+        "ara" => Espeak("ar"),
+        "hye" => Espeak("hy"),
+        "yue" => Espeak("yue"),
+        "hrv" => Espeak("hr"),
+        "ces" => Espeak("cs"),
+        "dan" => Espeak("da"),
+        "fas" => Espeak("fa"),
+        "nld" => Espeak("nl"),
+        "fin" => Espeak("fi"),
+        "hat" => Espeak("ht"),
+        "heb" => Espeak("he"),
+        "hun" => Espeak("hu"),
+        "isl" => Espeak("is"),
+        "ind" => Espeak("id"),
+        "gle" => Espeak("ga"),
+        "ell" => Espeak("el"),
+        "nor" => Espeak("nb"),
+        "pol" => Espeak("pl"),
+        "pan" => Espeak("pa"),
+        "ron" => Espeak("ro"),
+        "swa" => Espeak("sw"),
+        "swe" => Espeak("sv"),
+        "tur" => Espeak("tr"),
+        "ukr" => Espeak("uk"),
+        "urd" => Espeak("ur"),
+        "vie" => Espeak("vi"),
+        _ => return None,
+    })
+}
+
+/// Phonemize `text` as language `lang` (see [`label_source`]), with the
+/// current Hindi canon. Espeak languages take the espeak path; Hindi takes
+/// the ported chain; languages with an external backend or no source are
+/// [`Error::UnsupportedLanguage`].
+pub fn phonemize_lang(lang: &str, text: &str) -> Result<Phonemized, Error> {
+    phonemize_lang_with(lang, text, HindiCanon::Current)
+}
+
+/// [`phonemize_lang`] with an explicit Hindi label canon (irrelevant for
+/// other languages).
+pub fn phonemize_lang_with(lang: &str, text: &str, canon: HindiCanon) -> Result<Phonemized, Error> {
+    match label_source(lang) {
+        Some(LabelSource::Espeak(voice)) => phonemize(text, voice),
+        Some(LabelSource::Hindi) => Ok(hindi_phonemized(hindi::phonemize(text, canon)?)),
+        Some(LabelSource::ExternalBackend(_)) | None => {
+            Err(Error::UnsupportedLanguage(lang.to_string()))
+        }
+    }
+}
+
+/// Flatten per-word Hindi labels into the common shape.
+fn hindi_phonemized(words: Vec<hindi::Word>) -> Phonemized {
+    let mut out = Phonemized::default();
+    let mut raw_words = Vec::with_capacity(words.len());
+    for w in words {
+        let start = out.phonemes.len();
+        out.syllables
+            .extend(w.syllables.into_iter().map(|s| Syllable {
+                start: s.start + start,
+                end: s.end + start,
+                nucleus: s.nucleus + start,
+                ..s
+            }));
+        raw_words.push(w.phonemes.concat());
+        out.phonemes.extend(w.phonemes);
+        out.stress.extend(w.stress);
+        out.word_spans.push((start, out.phonemes.len()));
+    }
+    out.raw = raw_words.join(" ");
+    out
 }
 
 struct Engine {
