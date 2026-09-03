@@ -24,14 +24,16 @@
 //! table of where each language's labels come from, and [`phonemize_lang`]
 //! dispatches on it: espeak for most, the built-in [`hindi`], [`mandarin`],
 //! and [`japanese`] chains for Hindi, Simplified Mandarin, and Japanese
-//! (espeak's `hi`/`cmn`/`ja` voices are never used), and for Thai the
-//! vachana backend run as an embedded, pinned Python project ([`thai`]).
+//! (espeak's `hi`/`cmn`/`ja` voices are never used), and for Thai and
+//! Korean the vachana and g2pk backends run as embedded, pinned Python
+//! projects ([`thai`], [`korean`]).
 
 mod data;
 mod ffi;
 pub mod hindi;
 #[cfg(feature = "japanese")]
 pub mod japanese;
+pub mod korean;
 pub mod mandarin;
 pub mod parse;
 pub mod thai;
@@ -69,9 +71,10 @@ pub const ESPEAK_COMMIT: &str = env!("G2P_ESPEAK_COMMIT");
 /// output from a different build can never pose as current.
 pub fn identity() -> String {
     format!(
-        "g2p/{} espeak-ng/{ESPEAK_DIGEST} thai/{}",
+        "g2p/{} espeak-ng/{ESPEAK_DIGEST} thai/{} korean/{}",
         env!("CARGO_PKG_VERSION"),
-        thai::THAI_DIGEST
+        thai::THAI_DIGEST,
+        korean::KOREAN_DIGEST
     )
 }
 
@@ -192,6 +195,9 @@ pub enum LabelSource {
     /// vachana-thai, run as an embedded pinned Python project ([`thai`]);
     /// needs `uv` at runtime.
     Thai,
+    /// g2pk2 + mecab-ko, run as an embedded pinned Python project
+    /// ([`korean`]); needs `uv` at runtime.
+    Korean,
 }
 
 /// Label source for a language code (ISO 639-3, `zho-hans` for Simplified
@@ -203,6 +209,7 @@ pub fn label_source(lang: &str) -> Option<LabelSource> {
         "zho-hans" => Mandarin,
         "jpn" => Japanese,
         "tha" => Thai,
+        "kor" => Korean,
         // Model languages labeled from espeak. `pt-br`, not `pt`: European
         // Portuguese targets against Brazilian audio measured 41% median
         // phoneme distance where `pt-br` measured 31%.
@@ -213,10 +220,6 @@ pub fn label_source(lang: &str) -> Option<LabelSource> {
         "por" => Espeak("pt-br"),
         "spa" => Espeak("es"),
         "rus" => Espeak("ru"),
-        // Korean uses espeak because nothing better is wired up, not because
-        // espeak has been checked against a Korean corpus. Validate before
-        // trusting.
-        "kor" => Espeak("ko"),
         // Pimsleur-era languages in lexide's corpus, espeak-labeled and not
         // through a backend audit.
         "sqi" => Espeak("sq"),
@@ -270,7 +273,20 @@ pub fn phonemize_lang_with(lang: &str, text: &str, canon: HindiCanon) -> Result<
         #[cfg(not(feature = "japanese"))]
         Some(LabelSource::Japanese) => Err(Error::UnsupportedLanguage(lang.to_string())),
         Some(LabelSource::Thai) => Ok(thai_phonemized(thai::phonemize(text)?)),
+        Some(LabelSource::Korean) => Ok(korean_phonemized(korean::phonemize(text)?)),
         None => Err(Error::UnsupportedLanguage(lang.to_string())),
+    }
+}
+
+/// Korean labels in the common shape: no stress, no tone, the post-sandhi
+/// Hangul as `raw`.
+fn korean_phonemized(labels: korean::Labels) -> Phonemized {
+    Phonemized {
+        raw: labels.raw,
+        phonemes: labels.phonemes,
+        stress: labels.stress,
+        word_spans: labels.word_spans,
+        ..Phonemized::default()
     }
 }
 

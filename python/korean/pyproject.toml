@@ -1,0 +1,15 @@
+[project]
+name = "g2p-korean"
+version = "0.1.0"
+description = "Korean G2P backend for the g2p crate: g2pk2 (표준 발음법 rules with mecab-ko morphology), driven as a JSON-lines server"
+requires-python = ">=3.10"
+dependencies = [
+    "g2pk2==0.0.3",
+    "mecab-ko==1.0.2",
+    "mecab-ko-dic==1.0.0",
+]
+
+[tool.uv]
+# Deterministic: the crate's identity covers uv.lock, so a resolved change
+# is a new phonemizer build.
+package = false

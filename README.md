@@ -40,11 +40,34 @@ nothing downstream can tell.
 
 | languages | source |
 |---|---|
-| eng deu fra ita por spa rus (+ kor, unvalidated, and lexide's Pimsleur-era languages) | the espeak fork, one voice each |
+| eng deu fra ita por spa rus (+ lexide's Pimsleur-era languages) | the espeak fork, one voice each |
 | hin | the built-in Hindi chain (below) |
 | zho-hans | the built-in Mandarin chain (below) |
 | jpn | OpenJTalk via `jpreprocess` (below) |
 | tha | vachana-thai, as an embedded pinned Python project (below) |
+| kor | g2pk2 + mecab-ko, as an embedded pinned Python project (below) |
+
+### Korean
+
+espeak's `ko` voice matches Wiktionary on 47% of words: it has no tense
+consonants at all (달/딸/탈 collapse), splits affricates and aspirates into
+letters, and applies none of the implicit sound changes. Korean G2P is a
+settled rule table (the 표준 발음법); [g2pk](https://github.com/Kyubyong/g2pK)
+is the standard implementation — `g2pk2` is its maintained fork, used by the
+Korean TTS stacks and Montreal Forced Aligner — and matches Wiktionary on
+95.6% of words, the only candidate that also gets ㄴ-insertion (꽃잎 [꼰닙])
+and morphological tensification (넘다 [넘따], 할 것 [할껏]) because it tags
+with mecab-ko first. The remaining ~4% is lexical Sino-Korean tensification
+(결점 [결쩜]) that needs a dictionary. `python/korean/` is a `uv` project
+pinning `g2pk2`, the prebuilt `mecab-ko` wheel, and `mecab-ko-dic`; the crate
+embeds it, unpacks it beside the espeak data, and drives it as a JSON-lines
+server that returns each word's pronunciation as post-sandhi Hangul; the
+phone mapping runs in Rust (`src/korean.rs`, which documents the label set).
+The tagger and the one standard cross-word rule (27항) see the whole
+utterance; the sound-change table runs per word, because g2pk's regexes
+otherwise fire across spaces (안녕, 라디오 → [나디오]), which is not standard.
+**Needs `uv` on PATH**; the first call resolves the environment. Digits,
+Latin, hanja, and bare jamo are refused. The pins are part of `identity()`.
 
 ### Thai
 

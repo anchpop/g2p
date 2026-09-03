@@ -93,6 +93,13 @@ fn main() {
     println!("cargo:rerun-if-changed={}", thai.display());
     let thai_digest = digest_sources(&thai, &["pyproject.toml", "uv.lock", "g2p_thai.py"]);
     println!("cargo:rustc-env=G2P_THAI_DIGEST={thai_digest:016x}");
+    let korean = manifest_dir.join("python/korean");
+    println!("cargo:rerun-if-changed={}", korean.display());
+    let korean_digest = digest_sources(
+        &korean,
+        &["pyproject.toml", "uv.lock", "g2p_korean.py", "mecab.py"],
+    );
+    println!("cargo:rustc-env=G2P_KOREAN_DIGEST={korean_digest:016x}");
     println!(
         "cargo:rustc-env=G2P_ESPEAK_COMMIT={}",
         git_head(&src).unwrap_or_else(|| "unknown".to_string())
