@@ -87,6 +87,12 @@ fn main() {
     // shared between hosts, and any fork change invalidates them.
     let digest = digest_sources(&src, &output_relevant);
     println!("cargo:rustc-env=G2P_ESPEAK_DIGEST={digest:016x}");
+    // The Thai backend is a pinned Python project embedded in the binary;
+    // its pins and server script are part of the phonemizer identity too.
+    let thai = manifest_dir.join("python/thai");
+    println!("cargo:rerun-if-changed={}", thai.display());
+    let thai_digest = digest_sources(&thai, &["pyproject.toml", "uv.lock", "g2p_thai.py"]);
+    println!("cargo:rustc-env=G2P_THAI_DIGEST={thai_digest:016x}");
     println!(
         "cargo:rustc-env=G2P_ESPEAK_COMMIT={}",
         git_head(&src).unwrap_or_else(|| "unknown".to_string())

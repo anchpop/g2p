@@ -8,6 +8,20 @@ use std::path::{Path, PathBuf};
 
 static ARCHIVE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/espeak-ng-data.zst"));
 
+/// The per-build cache directory (`<cache>/g2p/<espeak digest>`), created if
+/// needed: where the espeak data and the Thai Python project are unpacked.
+pub(crate) fn cache_root() -> io::Result<PathBuf> {
+    let mut last_err = None;
+    for base in candidate_roots() {
+        let dir = base.join("g2p").join(crate::ESPEAK_DIGEST);
+        match std::fs::create_dir_all(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| io::Error::other("no writable cache directory")))
+}
+
 /// Directory to hand to `espeak_ng_InitializePath` (espeak appends
 /// `espeak-ng-data` itself). Unpacks the embedded data if needed.
 pub fn ensure_unpacked() -> io::Result<PathBuf> {

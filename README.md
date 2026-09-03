@@ -44,7 +44,23 @@ nothing downstream can tell.
 | hin | the built-in Hindi chain (below) |
 | zho-hans | the built-in Mandarin chain (below) |
 | jpn | OpenJTalk via `jpreprocess` (below) |
-| tha | a Python backend lexide runs outside this crate; `phonemize_lang` refuses it |
+| tha | vachana-thai, as an embedded pinned Python project (below) |
+
+### Thai
+
+espeak's `th` voice is not a G2P at all (0 of 3,000 Wiktionary words match;
+it spells consonants letter by letter). vachana-thai — TLTK's rule/lexicon
+front end over pythainlp's dictionary segmenter — matches Wiktionary on 88%
+of words segmentally and 87% on tone. It is not ported: its lexicon covers
+98.6% of corpus tokens, but the remainder goes through a probabilistic chart
+parser with trigram statistics, and refusing those sentences would drop 8% of
+the corpus. Instead `python/thai/` is a `uv` project pinning `vachana-g2p`
+and `pythainlp` with a lockfile; the crate embeds it, unpacks it beside the
+espeak data, and drives it as a JSON-lines server. lexide's label stage
+(phone inventory, tone per syllable, stress on each word's final syllable)
+runs in Rust. **Needs `uv` on PATH**; the first call resolves the
+environment. Mixed Thai/Latin text is refused. The pins are part of
+`identity()`.
 
 ### Japanese
 

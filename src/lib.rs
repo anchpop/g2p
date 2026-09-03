@@ -24,8 +24,8 @@
 //! table of where each language's labels come from, and [`phonemize_lang`]
 //! dispatches on it: espeak for most, the built-in [`hindi`], [`mandarin`],
 //! and [`japanese`] chains for Hindi, Simplified Mandarin, and Japanese
-//! (espeak's `hi`/`cmn`/`ja` voices are never used), and a refusal for Thai,
-//! whose labels come from a Python backend this crate does not run.
+//! (espeak's `hi`/`cmn`/`ja` voices are never used), and for Thai the
+//! vachana backend run as an embedded, pinned Python project ([`thai`]).
 
 mod data;
 mod ffi;
@@ -34,6 +34,7 @@ pub mod hindi;
 pub mod japanese;
 pub mod mandarin;
 pub mod parse;
+pub mod thai;
 
 pub use hindi::{Canon as HindiCanon, Syllable};
 
@@ -68,8 +69,9 @@ pub const ESPEAK_COMMIT: &str = env!("G2P_ESPEAK_COMMIT");
 /// output from a different build can never pose as current.
 pub fn identity() -> String {
     format!(
-        "g2p/{} espeak-ng/{ESPEAK_DIGEST}",
-        env!("CARGO_PKG_VERSION")
+        "g2p/{} espeak-ng/{ESPEAK_DIGEST} thai/{}",
+        env!("CARGO_PKG_VERSION"),
+        thai::THAI_DIGEST
     )
 }
 
@@ -92,6 +94,10 @@ pub enum Error {
     Unlabelable(String),
     #[error("no G2P backend for language {0:?}")]
     UnsupportedLanguage(String),
+    /// An out-of-process backend (Thai's Python project) could not be
+    /// started or died; the message says what to install.
+    #[error("G2P backend unavailable: {0}")]
+    Backend(String),
 }
 
 /// Phonemization of one utterance.
@@ -183,9 +189,9 @@ pub enum LabelSource {
     Mandarin,
     /// OpenJTalk via `jpreprocess` ([`japanese`]).
     Japanese,
-    /// A Python backend lexide runs outside this crate, by provider name.
-    /// Not callable from here yet.
-    ExternalBackend(&'static str),
+    /// vachana-thai, run as an embedded pinned Python project ([`thai`]);
+    /// needs `uv` at runtime.
+    Thai,
 }
 
 /// Label source for a language code (ISO 639-3, `zho-hans` for Simplified
@@ -196,7 +202,7 @@ pub fn label_source(lang: &str) -> Option<LabelSource> {
         "hin" => Hindi,
         "zho-hans" => Mandarin,
         "jpn" => Japanese,
-        "tha" => ExternalBackend("vachana-thai"),
+        "tha" => Thai,
         // Model languages labeled from espeak. `pt-br`, not `pt`: European
         // Portuguese targets against Brazilian audio measured 41% median
         // phoneme distance where `pt-br` measured 31%.
@@ -263,9 +269,20 @@ pub fn phonemize_lang_with(lang: &str, text: &str, canon: HindiCanon) -> Result<
         Some(LabelSource::Japanese) => Ok(japanese_phonemized(japanese::phonemize(text)?)),
         #[cfg(not(feature = "japanese"))]
         Some(LabelSource::Japanese) => Err(Error::UnsupportedLanguage(lang.to_string())),
-        Some(LabelSource::ExternalBackend(_)) | None => {
-            Err(Error::UnsupportedLanguage(lang.to_string()))
-        }
+        Some(LabelSource::Thai) => Ok(thai_phonemized(thai::phonemize(text)?)),
+        None => Err(Error::UnsupportedLanguage(lang.to_string())),
+    }
+}
+
+/// Thai labels in the common shape.
+fn thai_phonemized(labels: thai::Labels) -> Phonemized {
+    Phonemized {
+        raw: labels.raw,
+        phonemes: labels.phonemes,
+        stress: labels.stress,
+        word_spans: labels.word_spans,
+        tone: labels.tone,
+        ..Phonemized::default()
     }
 }
 

@@ -1,0 +1,14 @@
+[project]
+name = "g2p-thai"
+version = "0.1.0"
+description = "Thai G2P backend for the g2p crate: vachana-thai (TLTK rules + lexicon over pythainlp tokenization), driven as a JSON-lines server"
+requires-python = ">=3.10"
+dependencies = [
+    "vachana-g2p==0.0.3",
+    "pythainlp==5.3.5",
+]
+
+[tool.uv]
+# Deterministic: the crate's identity covers uv.lock, so a resolved change
+# is a new phonemizer build.
+package = false
