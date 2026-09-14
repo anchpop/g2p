@@ -123,3 +123,131 @@ fn concurrent_calls_are_serialized_and_correct() {
         h.join().unwrap();
     }
 }
+
+#[test]
+fn requested_words_use_merged_inventory() {
+    for (voice, text, unit) in [
+        ("en-us", "day", "eɪ"),
+        ("en-us", "my", "aɪ"),
+        ("en-us", "boy", "ɔɪ"),
+        ("en-us", "now", "aʊ"),
+        ("en-us", "go", "oʊ"),
+        ("en-gb", "go", "əʊ"),
+        ("en-us", "car", "ɑːɹ"),
+        ("en-us", "more", "ɔːɹ"),
+        ("en-us", "ear", "ɪɹ"),
+        ("en-us", "air", "ɛɹ"),
+        ("en-us", "tour", "ʊɹ"),
+        ("de", "Häuser", "ɔø"),
+        ("de", "Haus", "aʊ"),
+        ("de", "Eis", "aɪ"),
+        ("pt-br", "pão", "ɐ̃ʊ̃"),
+        ("pt-br", "mãe", "ɐ̃j"),
+        ("pt-br", "põe", "õɪ̃"),
+        ("pt-br", "muito", "ũɪ̃"),
+        ("pt-br", "mau", "aʊ"),
+        ("pt-br", "sei", "eɪ"),
+        ("pt-br", "sou", "oʊ"),
+        ("pt-br", "pai", "aɪ"),
+        ("cs", "dej", "eɪ"),
+        ("cs", "ou", "oʊ"),
+        ("cs", "auto", "aʊ"),
+        ("en-us", "church", "tʃ"),
+        ("en-us", "judge", "dʒ"),
+        ("it", "cielo", "tʃ"),
+        ("it", "giorno", "dʒ"),
+        ("it", "zio", "dz"),
+        ("it", "mezzo", "dzː"),
+        ("pt-br", "tchau", "tʃ"),
+        ("pt-br", "dia", "dʒ"),
+        ("ru", "чай", "tʃʲ"),
+        ("ru", "царь", "ts"),
+        ("de", "Zeit", "ts"),
+        ("de", "Pfad", "pf"),
+        ("fa", "چای", "tʃ"),
+        ("ar", "جميل", "dʒ"),
+    ] {
+        let p = phonemize(text, voice).unwrap();
+        assert!(
+            p.phonemes.iter().any(|p| p == unit),
+            "{voice} {text}: {p:?}, expected {unit}"
+        );
+        assert_eq!(p.phonemes.len(), p.stress.len());
+        assert_eq!(p.word_spans.last().unwrap().1, p.phonemes.len());
+        assert_eq!(p.raw, g2p::phonemize_raw(text, voice).unwrap());
+        assert!(!p.raw.contains('\u{1f}'));
+    }
+}
+
+#[test]
+fn source_artifacts_are_fixed_without_global_digit_or_caret_stripping() {
+    let fa = phonemize("قهوه", "fa").unwrap();
+    assert_eq!(fa.raw, "qˈahveː");
+    assert_eq!(fa.phonemes, ["q", "a", "h", "v", "eː"]);
+    let ru = phonemize("царь", "ru").unwrap();
+    assert_eq!(ru.raw, "tsˈɑrɪ");
+    assert_eq!(ru.phonemes, ["ts", "ɑ", "r", "ɪ"]);
+    assert_eq!(g2p::parse::parse("q1 ɪ^").phonemes, ["q", "1", "ɪ", "^"]);
+}
+
+#[test]
+fn actual_phone_and_word_boundaries_protect_clusters_and_onsets() {
+    let p = phonemize("cat ship", "en-us").unwrap();
+    assert!(!p.phonemes.iter().any(|p| p == "tʃ"), "{p:?}");
+    let p = phonemize("cats", "en-us").unwrap();
+    assert!(!p.phonemes.iter().any(|p| p == "ts"), "{p:?}");
+    for word in ["mirror", "hero"] {
+        let p = phonemize(word, "en-us").unwrap();
+        assert!(!p.phonemes.iter().any(|p| p == "ɪɹ"), "{p:?}");
+    }
+    let p = phonemize("day my. Boy now!", "en-us").unwrap();
+    assert_eq!(p.word_spans.len(), 4, "{p:?}");
+    let mut end = 0;
+    for (start, next) in p.word_spans {
+        assert_eq!(start, end);
+        assert!(next > start);
+        end = next;
+    }
+    assert_eq!(end, p.phonemes.len());
+}
+
+#[test]
+fn voice_aliases_use_resolved_language() {
+    assert_eq!(bare("go", "English (America)"), bare("go", "en-us"));
+    assert_eq!(bare("go", "en-us+f3"), bare("go", "en-us"));
+    assert!(bare("go", "English (Great Britain)").contains(&"əʊ".into()));
+}
+
+#[test]
+fn british_nonrhotic_outputs_are_not_invented() {
+    for (text, expected) in [
+        ("car", vec!["k", "ɑː"]),
+        ("air", vec!["e", "ə"]),
+        ("tour", vec!["t", "ʊ", "ə"]),
+    ] {
+        assert_eq!(bare(text, "en-gb"), expected);
+    }
+}
+
+#[test]
+fn explicit_ipa_ties_remain_inside_affricate_tokens() {
+    for (voice, text, expected) in [
+        (
+            "lv",
+            "cits četri",
+            vec!["t͡s", "i", "t", "s", "t͡ʃ", "e", "t", "r", "i"],
+        ),
+        (
+            "be",
+            "цар дзякуй",
+            vec!["t͡s", "a", "r", "d͡zʲ", "a", "k", "u", "j"],
+        ),
+        ("ps", "چای", vec!["t͡ʃ", "aː", "iː"]),
+    ] {
+        let p = phonemize(text, voice).unwrap();
+        assert_eq!(p.phonemes, expected, "{voice} {text}: {p:?}");
+        assert_eq!(p.stress.len(), p.phonemes.len());
+        assert_eq!(p.word_spans.last().unwrap().1, p.phonemes.len());
+        assert!(p.raw.contains('͡'));
+    }
+}

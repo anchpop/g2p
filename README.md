@@ -16,19 +16,57 @@ no `ESPEAK_NG_DATA_PATH`, no way to run against mainline espeak by mistake.
 
 - `raw` — espeak's IPA exactly as `espeak-ng -q --ipa -x` prints it (stress
   marks, word boundaries), clauses joined with spaces. For humans and LLMs.
-- `phonemes` / `stress` / `word_spans` — the tokenization the lexide
-  pronunciation model was trained on: stress and boundaries removed,
-  continuation diacritics folded onto the previous token, `ʲ` folded onto a
-  preceding consonant, language-switch markers stripped, each half of a
-  diphthong its own token. Anything that scores audio against the model
-  must use this form. See `src/parse.rs`.
+- `phonemes` / `stress` / `word_spans` — versioned pronunciation-model
+  labels: stress and boundaries removed, continuation diacritics folded onto
+  the previous token, `ʲ` folded onto a preceding consonant, language-switch
+  markers stripped, and the units below merged. See `src/parse.rs`.
+
+**0.4 changes the label inventory for the next training run.** Keep deployed
+models pinned to the g2p revision used to train them; do not replace their
+labels with these without retraining/relabeling.
+
+| espeak voice | single-token vowel units |
+|---|---|
+| English (`en-us`, `en-gb`) | `eɪ aɪ ɔɪ aʊ oʊ əʊ`; rhotic `ɑːɹ ɔːɹ ɪɹ ɛɹ ʊɹ` when emitted |
+| German (`de`) | `aɪ aʊ ɔʏ ɔø` (Häuser emits `ɔø`) |
+| Brazilian Portuguese (`pt-br`) | oral `aʊ eɪ oʊ aɪ`; nasal `ɐ̃ʊ̃ ɐ̃ɪ̃ õɪ̃ ũɪ̃` and mãe's literal `ɐ̃j` |
+| Czech (`cs`) | `eɪ oʊ aʊ` |
+
+Across espeak languages, affricates `tʃ dʒ ts dz tɕ dʑ tʂ dʐ ʈʂ ɖʐ pf bv tθ dð kx ɡɣ`
+merge **only inside an actual engine phoneme**, preserving decorations such as
+Russian `tʃʲ` and Italian `dzː`. Explicit IPA ties are preserved inside the unit
+(e.g. Latvian `t͡s`, Belarusian `d͡zʲ`, Pashto `t͡ʃ`), not emitted as stray labels.
+Adjacent `t` + `s` in English cats stays split.
+Vowel merges are also phone-boundary-aware, with two narrow same-word coda
+exceptions: English vowel + `ɹ` (more/ear are separate engine phones) and
+Portuguese `ɐ̃` + `j` (mãe). These exceptions never cross stress/language/word
+boundaries or consume a glide/r before another vowel (mirror/hero). The trace
+does not provide full syllabification; this coda rule is conservative, not a
+syllable parser. British nonrhotic car/air/tour keep their emitted vowels;
+we do not invent a rhotic. Nasal labels retain espeak's decomposed `õ`/`ũ`
+spellings and mãe's `j`; merging does not normalize or remap IPA. Voice aliases
+use the resolved language, and language-switch markers select the appropriate
+merge inventory (return markers restore the original regional voice).
+
+The engine callback captures a parallel phone-separated rendering of the
+**same** post-pitch/length phoneme list, without a second synthesis or changing
+public `raw`. Plain `parse::parse(raw)` retains legacy character segmentation:
+raw IPA cannot distinguish an affricate from two neighboring phones. Use
+`phonemize`/`phonemize_lang` for current labels.
+
+Stress, tone and length handling are unchanged (adjacent vowels still share
+stress, even across engine-phone separators). The Hindi, Japanese, Mandarin,
+Korean and Thai backend chains are unchanged. Source fixes remove the Persian
+q1 artifact (قهوه `q1ˈahveː` → `qˈahveː`) and Russian mnemonic `^` (царь
+`tsˈɑrɪ^` → `tsˈɑrɪ`); these corrections also appear in `raw`.
 
 Output is byte-identical to the CLI because it runs the same code path (a
 silent synthesis with the phoneme trace on), not the `espeak_TextToPhonemes`
 shortcut, which skips the pitch/length passes and differs on tone languages.
 
-`identity()` returns a string keyed on a digest of every fork source file that
-affects output. Stamp persisted phoneme data with it.
+`identity()` includes the crate version and a digest of every fork source file
+that affects output (including local source edits). Stamp persisted phoneme
+data with it.
 
 ## Languages
 

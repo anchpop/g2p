@@ -1,5 +1,5 @@
 //! Tokenize espeak-ng's `--ipa -x` output into phonemes, stress, and word
-//! spans — the segmentation the lexide pronunciation model was trained on.
+//! spans — versioned labels for pronunciation-model training and scoring.
 //!
 //! This is the one place that segmentation is defined. A model trained on
 //! labels segmented one way cannot be scored against targets segmented
@@ -16,8 +16,10 @@
 //! * Palatalization `ʲ` appends to a preceding *consonant* (Russian `tʲ`,
 //!   `ɫʲ`, `ʃʲ`) but stays its own token after a vowel, where espeak uses it
 //!   for a hiatus glide (Italian "io" = `iʲo`).
-//! * Everything else — vowel or consonant, including each half of a
-//!   diphthong — is its own token.
+//! * The framed engine path merges affricates inside an actual espeak phone,
+//!   and selected English/German/Brazilian Portuguese/Czech vowel units.
+//!   Plain `parse` retains the legacy character segmentation: raw IPA alone
+//!   cannot distinguish an affricate from adjacent stop/fricative phones.
 //! * espeak brackets language switches with markers like `(en)` or `(en-us)`;
 //!   these are stripped before tokenizing. Left in, the parentheses would be
 //!   junk tokens and the letters would pass as real phonemes.
@@ -113,20 +115,80 @@ fn marker_len(s: &[char]) -> Option<usize> {
     (i < s.len() && s[i] == ')').then_some(i + 1)
 }
 
-/// Parse one utterance of espeak `--ipa -x` output.
+/// Parse unframed `--ipa -x` output with legacy character segmentation.
+/// Use [`crate::phonemize`] for current model labels: it also reads the
+/// engine's phoneme boundaries, which cannot be recovered from raw IPA.
 pub fn parse(raw: &str) -> Parsed {
-    let raw = strip_language_markers(raw);
+    parse_impl(raw, None)
+}
+
+/// Private trace separator (not a word boundary). The renderer suppresses
+/// separators before modifiers, matching our continuation/palatalization rule.
+pub(crate) const PHONE_SEPARATOR: char = '\u{1f}';
+
+pub(crate) fn parse_framed(raw: &str, language: &str) -> Parsed {
+    parse_impl(raw, Some(language))
+}
+
+#[derive(Clone)]
+struct Origin {
+    phone: usize,
+    // Stress and language switches are barriers even for cross-phone merges.
+    barrier: usize,
+    language: String,
+}
+
+fn parse_impl(raw: &str, language: Option<&str>) -> Parsed {
+    let framed = language.is_some();
+    let default_language = language.unwrap_or("").to_ascii_lowercase();
+    let mut origin = Origin {
+        phone: 0,
+        barrier: 0,
+        language: default_language.clone(),
+    };
+    let mut origins = Vec::new();
+    let chars: Vec<char> = raw.chars().collect();
     let mut p = Parsed::default();
     let mut word_start = 0usize;
     let mut pending: Option<Stress> = None;
     let mut current = Stress::None;
     let mut in_vowel = false;
 
-    for ch in raw.chars() {
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '('
+            && let Some(len) = marker_len(&chars[i..])
+        {
+            if framed {
+                origin.language = chars[i + 1..i + len - 1]
+                    .iter()
+                    .collect::<String>()
+                    .to_ascii_lowercase();
+                // Switch markers name phoneme tables, not regional voices.
+                // On return to (pt), restore the original pt-br policy.
+                if default_language.split('-').next() == Some(origin.language.as_str()) {
+                    origin.language.clone_from(&default_language);
+                }
+                origin.barrier += 1;
+                origin.phone += 1;
+            }
+            i += len;
+            continue;
+        }
+        i += 1;
+        if framed && ch == PHONE_SEPARATOR {
+            origin.phone += 1;
+            // Do not reset stress: adjacent vowels historically share it.
+            continue;
+        }
+        let before = p.phonemes.len();
         if ch == 'ˈ' {
+            origin.barrier += 1;
             pending = Some(Stress::Primary);
             in_vowel = false;
         } else if ch == 'ˌ' {
+            origin.barrier += 1;
             pending = Some(Stress::Secondary);
             in_vowel = false;
         } else if WORD_BOUNDARIES.contains(ch) {
@@ -172,11 +234,106 @@ pub fn parse(raw: &str) -> Parsed {
             p.phonemes.push(ch.to_string());
             p.stress.push(Stress::None);
         }
+        if p.phonemes.len() > before {
+            origins.push(origin.clone());
+        }
     }
     if p.phonemes.len() > word_start {
         p.word_spans.push((word_start, p.phonemes.len()));
     }
-    p
+    if framed { merge_units(p, &origins) } else { p }
+}
+
+fn english(language: &str) -> bool {
+    language == "en" || language.starts_with("en-")
+}
+
+fn vowel_unit(unit: &str, language: &str) -> bool {
+    if english(language) {
+        matches!(
+            unit,
+            "eɪ" | "aɪ" | "ɔɪ" | "aʊ" | "oʊ" | "əʊ" | "ɑːɹ" | "ɔːɹ" | "ɪɹ" | "ɛɹ" | "ʊɹ"
+        )
+    } else {
+        match language {
+            "de" => matches!(unit, "aɪ" | "aʊ" | "ɔʏ" | "ɔø"),
+            "pt-br" => matches!(
+                unit,
+                "aʊ" | "eɪ" | "oʊ" | "aɪ" | "ɐ̃ʊ̃" | "ɐ̃ɪ̃" | "ɐ̃j" | "õɪ̃" | "ũɪ̃"
+            ),
+            "cs" => matches!(unit, "eɪ" | "oʊ" | "aʊ"),
+            _ => false,
+        }
+    }
+}
+
+fn affricate(left: &str, right: &str) -> bool {
+    // Keep all existing length/continuation/palatalization detail. In
+    // particular Italian dzː and Russian tʃʲ remain single decorated units.
+    let base = |s: &str| {
+        s.chars()
+            .filter(|c| !CONTINUATIONS.contains(*c) && *c != 'ʲ')
+            .collect::<String>()
+    };
+    matches!(
+        (base(left).as_str(), base(right).as_str()),
+        ("t", "ʃ" | "s" | "ɕ" | "ʂ" | "θ")
+            | ("d", "ʒ" | "z" | "ʑ" | "ʐ" | "ð")
+            | ("p", "f")
+            | ("b", "v")
+            | ("k", "x")
+            | ("ɡ", "ɣ")
+            | ("ʈ", "ʂ")
+            | ("ɖ", "ʐ")
+    )
+}
+
+fn merge_units(p: Parsed, origins: &[Origin]) -> Parsed {
+    let mut out = Parsed::default();
+    for (start, end) in p.word_spans {
+        let word_start = out.phonemes.len();
+        let mut i = start;
+        while i < end {
+            let mut unit = p.phonemes[i].clone();
+            let mut count = 1;
+            if i + 1 < end {
+                // Some tables spell affricates with an explicit IPA tie.
+                // Legacy parsing keeps that tie as a third token; consume it
+                // only when ALL three pieces belong to the same engine phone.
+                let tied = i + 2 < end && matches!(p.phonemes[i + 1].as_str(), "͡" | "͜");
+                let width = if tied { 3 } else { 2 };
+                let last = i + width - 1;
+                let a = &origins[i];
+                let b = &origins[last];
+                let right = &p.phonemes[last];
+                let joined = p.phonemes[i..=last].concat();
+                let same_phone = a.phone == b.phone;
+                // espeak spells more/ear as separate vowel + r phones and
+                // mãe as ɐ̃ + j. Merge only a coda, never before another vowel
+                // (mirror/hero). The trace has no full syllabification, so
+                // this conservative exception intentionally misses some cases.
+                let coda = i + 2 == end || !starts_with_vowel(&p.phonemes[i + 2]);
+                let cross_phone = coda
+                    && ((english(&a.language) && right == "ɹ")
+                        || (a.language == "pt-br" && joined == "ɐ̃j"));
+                if a.barrier == b.barrier
+                    && a.language == b.language
+                    && ((same_phone && affricate(&unit, right))
+                        || (!tied
+                            && (same_phone || cross_phone)
+                            && vowel_unit(&joined, &a.language)))
+                {
+                    unit = joined;
+                    count = width;
+                }
+            }
+            out.phonemes.push(unit);
+            out.stress.push(p.stress[i]);
+            i += count;
+        }
+        out.word_spans.push((word_start, out.phonemes.len()));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -251,5 +408,177 @@ mod tests {
         let p = parse("  a  b ");
         assert_eq!(p.word_spans, vec![(0, 1), (1, 2)]);
         assert!(parse("").word_spans.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod framed_tests {
+    use super::*;
+
+    fn framed(trace: &str, language: &str) -> Parsed {
+        parse_framed(&trace.replace(';', &PHONE_SEPARATOR.to_string()), language)
+    }
+
+    #[test]
+    fn separator_is_not_whitespace_or_a_word_boundary() {
+        assert!(!PHONE_SEPARATOR.is_whitespace());
+        assert!(!WORD_BOUNDARIES.contains(PHONE_SEPARATOR));
+    }
+
+    #[test]
+    fn every_vowel_unit_and_its_near_misses() {
+        let inventories = [
+            (
+                "en-us",
+                vec![
+                    "eɪ", "aɪ", "ɔɪ", "aʊ", "oʊ", "əʊ", "ɑːɹ", "ɔːɹ", "ɪɹ", "ɛɹ", "ʊɹ",
+                ],
+            ),
+            (
+                "en-gb",
+                vec![
+                    "eɪ", "aɪ", "ɔɪ", "aʊ", "oʊ", "əʊ", "ɑːɹ", "ɔːɹ", "ɪɹ", "ɛɹ", "ʊɹ",
+                ],
+            ),
+            ("de", vec!["aɪ", "aʊ", "ɔʏ", "ɔø"]),
+            (
+                "pt-br",
+                vec!["aʊ", "eɪ", "oʊ", "aɪ", "ɐ̃ʊ̃", "ɐ̃ɪ̃", "ɐ̃j", "õɪ̃", "ũɪ̃"],
+            ),
+            ("cs", vec!["eɪ", "oʊ", "aʊ"]),
+        ];
+        for (language, units) in inventories {
+            for unit in units {
+                let legacy = parse(unit).phonemes;
+                assert_eq!(legacy.len(), 2, "{unit}");
+                let p = framed(&format!("ˈ{unit}"), language);
+                assert_eq!(p.phonemes, [unit], "{language}: {unit}");
+                assert_eq!(p.stress, [Stress::Primary]);
+                assert_eq!(p.word_spans, [(0, 1)]);
+                // Identical spelling in another language is not sufficient.
+                assert_eq!(framed(unit, "fr-fr").phonemes, legacy);
+                for boundary in WORD_BOUNDARIES.chars() {
+                    let p = framed(&legacy.join(&boundary.to_string()), language);
+                    assert_eq!(p.phonemes, legacy, "{language}: {unit} {boundary:?}");
+                    assert_eq!(p.word_spans, [(0, 1), (1, 2)]);
+                }
+                assert_eq!(framed(&legacy.join("ˈ"), language).phonemes, legacy);
+                assert_eq!(framed(&legacy.join("ˌ"), language).phonemes, legacy);
+                // Ordinary diphthongs must be one engine phone; only coda-r
+                // and the attested mãe glide have narrow cross-phone rules.
+                if !unit.ends_with('ɹ') && unit != "ɐ̃j" {
+                    assert_eq!(framed(&legacy.join(";"), language).phonemes, legacy);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_affricate_requires_an_actual_phone() {
+        for unit in [
+            "tʃ", "dʒ", "ts", "dz", "tɕ", "dʑ", "tʂ", "dʐ", "pf", "bv", "tθ", "dð", "kx", "ɡɣ",
+            "tʃʲ", "dzː", "tːs", "ʈʂ", "ɖʐ", "t͡s", "t͡ʃ", "t͡sʲ", "d͡z", "d͡zʲ", "ʈ͡ʂ", "ɖ͡ʐ", "d͡ʒ",
+            "t͜s",
+        ] {
+            let legacy = parse(unit).phonemes;
+            for language in [
+                "en-us", "it", "pt-br", "ru", "de", "fa", "ar", "pl", "fr-fr",
+            ] {
+                assert_eq!(framed(unit, language).phonemes, [unit]);
+                assert_eq!(framed(unit, language).stress, [Stress::None]);
+                for delimiter in [";", " ", "ˈ", "ˌ", "(en)"] {
+                    if legacy.len() == 3 {
+                        // A separator on EITHER side of the tie disqualifies
+                        // the complete three-part unit, not only two at once.
+                        for split in 1..3 {
+                            let raw = format!(
+                                "{}{}{}",
+                                legacy[..split].concat(),
+                                delimiter,
+                                legacy[split..].concat()
+                            );
+                            assert_eq!(framed(&raw, language).phonemes, legacy);
+                        }
+                    }
+                    assert_eq!(
+                        framed(&legacy.join(delimiter), language).phonemes,
+                        legacy,
+                        "{unit} in {language} with {delimiter:?}"
+                    );
+                }
+            }
+        }
+        for near_miss in ["tɹ", "dɹ", "ps", "ks", "tʰ", "dʱ", "iʲo"] {
+            assert_eq!(
+                framed(near_miss, "en-us").phonemes,
+                parse(near_miss).phonemes
+            );
+        }
+    }
+
+    #[test]
+    fn coda_exceptions_do_not_swallow_onsets_or_switches() {
+        for unit in ["ɑːɹ", "ɔːɹ", "ɪɹ", "ɛɹ", "ʊɹ"] {
+            let parts = parse(unit).phonemes;
+            let split = parts.join(";");
+            assert_eq!(framed(&split, "en-us").phonemes, [unit]);
+            assert_eq!(
+                framed(&format!("{split};ə"), "en-us").phonemes,
+                [parts[0].as_str(), "ɹ", "ə"]
+            );
+            assert_eq!(framed(&parts.join("(en)"), "en-us").phonemes, parts);
+        }
+        assert_eq!(framed("ˈɐ̃;j", "pt-br").phonemes, ["ɐ̃j"]);
+        assert_eq!(framed("ɐ̃;j;a", "pt-br").phonemes, ["ɐ̃", "j", "a"]);
+        assert_eq!(framed("ɐ̃;j", "pt").phonemes, ["ɐ̃", "j"]);
+    }
+
+    #[test]
+    fn stress_length_tones_and_word_indices_stay_aligned() {
+        let p = framed(";tʃ;ˈeɪ;t;s ;dʒ;ˌaʊ ;ˈa;ɪ ;iː;5", "en-us");
+        assert_eq!(
+            p.phonemes,
+            ["tʃ", "eɪ", "t", "s", "dʒ", "aʊ", "a", "ɪ", "iː", "5"]
+        );
+        assert_eq!(p.word_spans, [(0, 4), (4, 6), (6, 8), (8, 10)]);
+        assert_eq!(
+            p.stress,
+            [
+                Stress::None,
+                Stress::Primary,
+                Stress::None,
+                Stress::None,
+                Stress::None,
+                Stress::Secondary,
+                Stress::Primary,
+                Stress::Primary,
+                Stress::None,
+                Stress::None
+            ]
+        );
+        for raw in ["iː5", "aˈɪ", "tʲ;ɪ;ɫʲ", "ː;a", "", ";;;", "  "] {
+            assert_eq!(framed(raw, "cmn"), parse(&raw.replace(';', "")));
+        }
+    }
+
+    #[test]
+    fn language_switches_change_only_merge_policy() {
+        let p = framed("aɪ;(en)ˈaɪ;(fr)aɪ", "fr-fr");
+        assert_eq!(p.phonemes, ["a", "ɪ", "aɪ", "a", "ɪ"]);
+        assert_eq!(
+            p.stress,
+            [
+                Stress::None,
+                Stress::None,
+                Stress::Primary,
+                Stress::Primary,
+                Stress::Primary
+            ]
+        );
+        assert_eq!(framed("a(en)ɪ", "en-us").phonemes, ["a", "ɪ"]);
+        assert_eq!(
+            framed("(en)ˈaɪ (pt)m;ˈɐ̃;j", "pt-br").phonemes,
+            ["aɪ", "m", "ɐ̃j"]
+        );
     }
 }

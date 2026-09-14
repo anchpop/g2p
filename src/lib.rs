@@ -16,9 +16,9 @@
 //!
 //! Every result carries the raw IPA string espeak printed (word boundaries
 //! and stress marks intact, for humans and LLMs) and its tokenization into
-//! the phoneme sequence the lexide pronunciation model was trained on (see
-//! [`parse`]). Callers that score audio must use the tokenized form; the two
-//! must never be mixed.
+//! the versioned label inventory (see [`parse`]). Models must pin the g2p
+//! revision used for training. Callers that score audio use the tokenized
+//! form, never raw IPA.
 //!
 //! Not every language is an espeak language. [`label_source`] is the one
 //! table of where each language's labels come from, and [`phonemize_lang`]
@@ -141,12 +141,12 @@ pub struct Phonemized {
 ///
 /// Thread-safe (espeak-ng has global state; calls serialize on a lock).
 pub fn phonemize(text: &str, voice: &str) -> Result<Phonemized, Error> {
-    let raw = phonemize_raw(text, voice)?;
+    let (raw, framed, language) = phonemize_traces(text, voice)?;
     let Parsed {
         phonemes,
         stress,
         word_spans,
-    } = parse::parse(&raw);
+    } = parse::parse_framed(&framed, &language);
     Ok(Phonemized {
         raw,
         phonemes,
@@ -161,6 +161,10 @@ pub fn phonemize(text: &str, voice: &str) -> Result<Phonemized, Error> {
 
 /// Just espeak's IPA string for `text` (clauses joined with single spaces).
 pub fn phonemize_raw(text: &str, voice: &str) -> Result<String, Error> {
+    Ok(phonemize_traces(text, voice)?.0)
+}
+
+fn phonemize_traces(text: &str, voice: &str) -> Result<(String, String, String), Error> {
     let mut guard = engine()?;
     let engine = guard.as_mut().expect("engine() initializes the engine");
     engine.select_voice(voice)?;
@@ -169,11 +173,15 @@ pub fn phonemize_raw(text: &str, voice: &str) -> Result<String, Error> {
         .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
         .collect();
     let clauses = engine.synth(&flat)?;
-    Ok(clauses
-        .iter()
-        .flat_map(|c| c.split_whitespace())
-        .collect::<Vec<_>>()
-        .join(" "))
+    let join = |lines: Vec<String>| {
+        lines
+            .iter()
+            .flat_map(|c| c.split_whitespace())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let (raw, framed): (Vec<_>, Vec<_>) = clauses.into_iter().unzip();
+    Ok((join(raw), join(framed), engine.language.clone()))
 }
 
 /// Where a language's phoneme labels come from. One table for both yap and
@@ -361,13 +369,14 @@ fn hindi_phonemized(words: Vec<hindi::Word>) -> Phonemized {
 
 struct Engine {
     voice: Option<String>,
+    language: String,
 }
 
 static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
 
 thread_local! {
-    /// Clause strings delivered by the phoneme callback during one `synth`.
-    static CLAUSES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Raw and phone-separated renderings of the SAME post-pitch/length clause.
+    static CLAUSES: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
 }
 
 unsafe extern "C" fn discard_audio(
@@ -383,7 +392,19 @@ unsafe extern "C" fn collect_clause(s: *const std::os::raw::c_char) -> std::os::
         // SAFETY: espeak passes a NUL-terminated string it owns for the
         // duration of the call; we copy it out immediately.
         let line = unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned();
-        CLAUSES.with(|c| c.borrow_mut().push(line));
+        // SAFETY: synchronous callback runs under ENGINE's lock, after
+        // CalcPitches/CalcLengths and before Generate mutates the phone list.
+        // The internal renderer reuses its static buffer, so raw MUST be
+        // copied first, and the separated result copied before returning.
+        // It only formats the current list; there is no second synthesis.
+        let framed = unsafe {
+            CStr::from_ptr(ffi::GetTranslatedPhonemeString(
+                ffi::ESPEAK_PHONEMES_IPA | ((parse::PHONE_SEPARATOR as i32) << 8),
+            ))
+        }
+        .to_string_lossy()
+        .into_owned();
+        CLAUSES.with(|c| c.borrow_mut().push((line, framed)));
     }
     0
 }
@@ -435,7 +456,10 @@ impl Engine {
             );
             ffi::espeak_SetPhonemeCallback(Some(collect_clause));
         }
-        Ok(Engine { voice: None })
+        Ok(Engine {
+            voice: None,
+            language: String::new(),
+        })
     }
 
     fn select_voice(&mut self, voice: &str) -> Result<(), Error> {
@@ -467,11 +491,22 @@ impl Engine {
             self.voice = None;
             return Err(Error::UnknownVoice(voice.to_string()));
         }
+        // Use the resolved voice's primary language, not the caller's alias
+        // ("English (America)", "en-us+f3", etc.). `languages` is a list of
+        // priority-byte + NUL-terminated language entries; we need the first.
+        // SAFETY: a successful voice selection supplies the engine-owned
+        // voice; pointers remain valid while this lock is held.
+        self.language = unsafe {
+            let selected = ffi::espeak_GetCurrentVoice();
+            CStr::from_ptr((*selected).languages.add(1))
+        }
+        .to_string_lossy()
+        .into_owned();
         self.voice = Some(voice.to_string());
         Ok(())
     }
 
-    fn synth(&mut self, text: &str) -> Result<Vec<String>, Error> {
+    fn synth(&mut self, text: &str) -> Result<Vec<(String, String)>, Error> {
         let c_text = CString::new(text).map_err(|_| Error::NulByte)?;
         CLAUSES.with(|c| c.borrow_mut().clear());
         // SAFETY: `size` includes the terminating NUL as the API requires;
