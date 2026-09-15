@@ -14,6 +14,8 @@
 //! Request:  `{"text": "on est", "voice": "fr-fr"}` or
 //!           `{"text": "यह शहर", "lang": "hin", "canon": "legacy"}`
 //!           (`canon` is optional and only affects Hindi; default `current`).
+//!           `voice` may accompany `lang` as a dialect/voice override, e.g.
+//!           `{"text": "zapato", "lang": "spa", "voice": "es-419"}`.
 //! Response: `{"raw": "ɔ̃ nˈɛ", "phonemes": ["ɔ̃","n","ɛ"], "stress": [0,0,1],
 //!            "word_spans": [[0,1],[1,3]]}` plus `"syllables": [...]` when
 //!            the backend computes them, or `{"error": "...",
@@ -89,8 +91,9 @@ impl From<Result<g2p::Phonemized, g2p::Error>> for Response {
 fn handle(req: Request) -> Response {
     match (req.voice, req.lang) {
         (Some(voice), None) => Response::from(g2p::phonemize(&req.text, &voice)),
-        (None, Some(lang)) => Response::from(g2p::phonemize_lang_with(
+        (voice, Some(lang)) => Response::from(g2p::phonemize_language(
             &lang,
+            voice.as_deref(),
             &req.text,
             req.canon.unwrap_or(g2p::HindiCanon::Current),
         )),
@@ -98,6 +101,66 @@ fn handle(req: Request) -> Response {
             error: "request needs exactly one of `voice` or `lang`".into(),
             unlabelable: None,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn response(request: Value) -> Value {
+        serde_json::to_value(handle(serde_json::from_value(request).unwrap())).unwrap()
+    }
+
+    #[test]
+    fn language_with_voice_matches_voice_only() {
+        assert_eq!(
+            response(json!({"text": "zapato", "lang": "spa", "voice": "es-419"})),
+            response(json!({"text": "zapato", "voice": "es-419"}))
+        );
+        assert_eq!(
+            response(json!({"text": "zapato", "lang": "spa"})),
+            response(json!({"text": "zapato", "voice": "es"}))
+        );
+    }
+
+    #[test]
+    fn backend_voice_override_is_a_caller_error_not_a_refusal() {
+        assert_eq!(
+            response(json!({"text": "यह शहर", "lang": "hin", "voice": "hi"})),
+            json!({"error": "voice \"hi\" is not applicable to language \"hin\""})
+        );
+    }
+
+    #[test]
+    fn language_canon_is_preserved() {
+        let expected = Response::from(g2p::phonemize_lang_with(
+            "hin",
+            "यह शहर",
+            g2p::HindiCanon::Legacy,
+        ));
+        assert_eq!(
+            response(json!({"text": "यह शहर", "lang": "hin", "canon": "legacy"})),
+            serde_json::to_value(expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn missing_language_and_voice_keeps_existing_error() {
+        assert_eq!(
+            response(json!({"text": "hello"})),
+            json!({"error": "request needs exactly one of `voice` or `lang`"})
+        );
+    }
+
+    #[test]
+    fn refusal_keeps_unlabelable_reason() {
+        let result = Response::from(Err(g2p::Error::Unlabelable("reason:detail".into())));
+        assert_eq!(
+            serde_json::to_value(result).unwrap(),
+            json!({"error": "cannot label this text: reason:detail", "unlabelable": "reason:detail"})
+        );
     }
 }
 

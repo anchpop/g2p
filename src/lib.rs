@@ -97,6 +97,9 @@ pub enum Error {
     Unlabelable(String),
     #[error("no G2P backend for language {0:?}")]
     UnsupportedLanguage(String),
+    /// This language's backend cannot honor a voice override.
+    #[error("voice {voice:?} is not applicable to language {lang:?}")]
+    VoiceNotApplicable { lang: String, voice: String },
     /// An out-of-process backend (Thai's Python project) could not be
     /// started or died; the message says what to install.
     #[error("G2P backend unavailable: {0}")]
@@ -262,18 +265,32 @@ pub fn label_source(lang: &str) -> Option<LabelSource> {
 }
 
 /// Phonemize `text` as language `lang` (see [`label_source`]), with the
-/// current Hindi canon. Espeak languages take the espeak path; Hindi takes
-/// the ported chain; languages with an external backend or no source are
-/// [`Error::UnsupportedLanguage`].
+/// current Hindi canon and the language's default voice/backend.
 pub fn phonemize_lang(lang: &str, text: &str) -> Result<Phonemized, Error> {
-    phonemize_lang_with(lang, text, HindiCanon::Current)
+    phonemize_language(lang, None, text, HindiCanon::Current)
 }
 
 /// [`phonemize_lang`] with an explicit Hindi label canon (irrelevant for
 /// other languages).
 pub fn phonemize_lang_with(lang: &str, text: &str, canon: HindiCanon) -> Result<Phonemized, Error> {
+    phonemize_language(lang, None, text, canon)
+}
+
+/// Phonemize `text` as language `lang`, optionally overriding its default
+/// voice/dialect. Languages using a dedicated backend reject voice overrides
+/// with [`Error::VoiceNotApplicable`]. `canon` only affects Hindi.
+pub fn phonemize_language(
+    lang: &str,
+    voice: Option<&str>,
+    text: &str,
+    canon: HindiCanon,
+) -> Result<Phonemized, Error> {
     match label_source(lang) {
-        Some(LabelSource::Espeak(voice)) => phonemize(text, voice),
+        Some(LabelSource::Espeak(default_voice)) => phonemize(text, voice.unwrap_or(default_voice)),
+        Some(_) if voice.is_some() => Err(Error::VoiceNotApplicable {
+            lang: lang.to_string(),
+            voice: voice.unwrap().to_string(),
+        }),
         Some(LabelSource::Hindi) => Ok(hindi_phonemized(hindi::phonemize(text, canon)?)),
         Some(LabelSource::Mandarin) => Ok(mandarin_phonemized(mandarin::phonemize(text)?)),
         #[cfg(feature = "japanese")]
