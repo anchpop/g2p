@@ -85,6 +85,22 @@ nothing downstream can tell.
 | tha | vachana-thai, as an embedded pinned Python project (below) |
 | kor | g2pk2 + mecab-ko, as an embedded pinned Python project (below) |
 
+### Pronunciation varieties
+
+Use a language plus `Variety` rather than coupling callers to backend voice
+names. Spanish `Default` and `European` use European labels (`es`, distinción);
+`LatinAmerican` uses `es-419` (seseo). Every other language rejects non-default
+varieties with `Error::VarietyNotApplicable`. Portuguese stays `pt-br`: the
+course is Brazilian only and European recordings are excluded.
+
+`PhonemizeRequest` stores one `VoiceChoice`: a variety or a raw espeak voice.
+The `.variety(...)` and `.voice(...)` setters replace that choice. Raw voices
+are an escape hatch for explicit engine access or replaying training labels,
+not a separate variety setting. Dedicated backends reject them with
+`Error::VoiceNotApplicable`; unsupported language codes remain
+`Error::UnsupportedLanguage` even with a raw voice. Raw voices are not
+cross-checked against the language's voice family.
+
 ### Korean
 
 espeak's `ko` voice matches Wiktionary on 47% of words: it has no tense
@@ -193,6 +209,10 @@ let p = g2p::phonemize("on est", "fr-fr")?;          // by espeak voice
 assert_eq!(p.phonemes, ["ɔ̃", "n", "ɛ"]);
 let h = g2p::phonemize_lang("hin", "यह शहर")?;        // by language, current labels
 let l = g2p::phonemize_lang_with("hin", "यह शहर", g2p::HindiLabels::Legacy)?;
+let s = g2p::phonemize_language(
+    g2p::PhonemizeRequest::new("spa", "cinco").variety(g2p::Variety::LatinAmerican),
+)?;
+assert_eq!(s.phonemes[0], "s");
 ```
 
 Voices are espeak voice names (`fr-fr`, `en-us`, `pt-br`, `cmn`, `ru`, …),
@@ -213,6 +233,15 @@ g2p serve                    # JSON lines on stdin/stdout, one utterance per lin
 `{"text": ..., "voice": ...}` or `{"text": ..., "lang": ..., "hindi_labels": ...}`
 requests through it. Each line is exactly one utterance, so the
 clause-versus-line framing ambiguity of `espeak-ng --stdin` cannot occur.
+
+An optional `"variety"` is `"default"` (also when omitted), `"latin_american"`,
+or `"european"`, for example
+`{"text": "cinco", "lang": "spa", "variety": "latin_american"}`. A raw `voice`
+overrides variety, including a non-default variety inapplicable to `lang`.
+Voice-only requests keep the direct raw espeak path, also ignoring variety.
+Unknown variety names and null are schema errors even with a raw voice; a
+request without either `lang` or `voice` is an error, not an implicit language.
+
 Responses carry `syllables` when the backend computes them, and a refusal
 comes back as `{"error": ..., "unlabelable": "reason:detail"}`.
 

@@ -120,3 +120,18 @@ fn all_shared_labels_roundtrip_without_engines() {
         word_spans: vec![(0, 2)],
     });
 }
+
+#[test]
+fn varieties_use_snake_case() {
+    use g2p_types::Variety;
+    assert_eq!(Variety::default(), Variety::Default);
+    for (variety, name) in [
+        (Variety::Default, "default"),
+        (Variety::LatinAmerican, "latin_american"),
+        (Variety::European, "european"),
+    ] {
+        assert_eq!(serde_json::to_value(variety).unwrap(), name);
+        roundtrip(variety);
+    }
+    assert!(serde_json::from_str::<Variety>("\"LatinAmerican\"").is_err());
+}

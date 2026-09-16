@@ -1,4 +1,4 @@
-//! Shared japanese labels.
+//! Shared Japanese labels.
 
 use crate::Pitch;
 

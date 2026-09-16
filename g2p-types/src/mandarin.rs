@@ -1,4 +1,4 @@
-//! Shared mandarin labels.
+//! Shared Mandarin labels.
 
 /// One syllable's labels.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

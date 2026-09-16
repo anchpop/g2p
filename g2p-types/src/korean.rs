@@ -1,4 +1,4 @@
-//! Shared korean labels.
+//! Shared Korean labels.
 
 /// One utterance's labels.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]

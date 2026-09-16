@@ -23,6 +23,7 @@ pub struct Pitch {
     /// Realized level: 0 = L, 1 = H. The trained target.
     pub level: u8,
 }
+
 /// Phonemization of one utterance.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Phonemized {
@@ -77,4 +78,18 @@ pub enum LabelSource {
     /// g2pk2 + mecab-ko, run as an embedded pinned Python project
     /// ([`korean`]); needs `uv` at runtime.
     Korean,
+}
+
+/// A language's pronunciation variety, independent of backend voice names.
+/// Currently only Spanish accepts a non-default variety.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Variety {
+    /// Preserve the language's established default labels.
+    #[default]
+    Default,
+    /// Spanish with seseo (espeak `es-419`).
+    LatinAmerican,
+    /// European Spanish with distinción (espeak `es`).
+    European,
 }
