@@ -1,6 +1,5 @@
-use g2p_types::{HindiLabels, LabelSource, Parsed, Phonemized, Pitch, Stress, Syllable};
+use g2p_types::{LabelSource, Parsed, Phonemized, Pitch, Stress, Syllable};
 use serde::{Serialize, de::DeserializeOwned};
-use std::borrow::Cow;
 use std::fmt::Debug;
 
 fn roundtrip<T: Serialize + DeserializeOwned + PartialEq + Debug>(value: T) {
@@ -9,10 +8,11 @@ fn roundtrip<T: Serialize + DeserializeOwned + PartialEq + Debug>(value: T) {
 }
 
 #[test]
-fn label_sources_deserialize_from_owned_input() {
+fn label_sources_are_copy_and_serialize_as_unit_variants() {
+    fn assert_copy<T: Copy>() {}
+    assert_copy::<LabelSource>();
     for source in [
-        LabelSource::Espeak("fr-fr".into()),
-        LabelSource::Espeak(format!("{}-{}", "es", 419).into()),
+        LabelSource::Espeak,
         LabelSource::Hindi,
         LabelSource::Mandarin,
         LabelSource::Japanese,
@@ -21,23 +21,15 @@ fn label_sources_deserialize_from_owned_input() {
     ] {
         roundtrip(source);
     }
-    let source = {
-        let input = String::from(r#"{"Espeak":"custom-voice"}"#);
-        serde_json::from_str::<LabelSource>(&input).unwrap()
-    };
-    assert!(matches!(source, LabelSource::Espeak(Cow::Owned(voice)) if voice == "custom-voice"));
+    assert_eq!(serde_json::to_value(LabelSource::Espeak).unwrap(), "Espeak");
+    assert_eq!(
+        serde_json::from_str::<LabelSource>("\"Espeak\"").unwrap(),
+        LabelSource::Espeak
+    );
 }
 
 #[test]
 fn existing_serialized_shapes_are_preserved() {
-    assert_eq!(
-        serde_json::to_string(&HindiLabels::Legacy).unwrap(),
-        "\"legacy\""
-    );
-    assert_eq!(
-        serde_json::to_string(&HindiLabels::Current).unwrap(),
-        "\"current\""
-    );
     for (stress, name, code) in [
         (Stress::None, "None", 0),
         (Stress::Primary, "Primary", 1),
@@ -129,6 +121,7 @@ fn varieties_use_snake_case() {
         (Variety::Default, "default"),
         (Variety::LatinAmerican, "latin_american"),
         (Variety::European, "european"),
+        (Variety::Brazilian, "brazilian"),
     ] {
         assert_eq!(serde_json::to_value(variety).unwrap(), name);
         roundtrip(variety);

@@ -1,17 +1,20 @@
-//! Outputs captured after the mechanical Hindi rename, before the shared-type
-//! extraction and variety API. Preserve the complete JSON bytes, including
-//! numeric CLI stress, optional fields, raw IPA, and word/syllable boundaries.
+//! Ten public outputs captured before the shared-type extraction: all non-Hindi
+//! bytes and the Current Hindi row are unchanged. Hindi still defaults to the
+//! trained Current labels; its selector is now private. The eleventh, historical
+//! Legacy output lives in hindi-legacy.json and is checked by an internal Hindi
+//! test; it is no longer a public option.
 use std::io::Write;
 use std::process::{Command, Stdio};
 
 #[test]
-fn default_labels_remain_byte_identical() {
+fn supported_model_labels_remain_byte_identical() {
     let requests: Vec<_> = include_str!("fixtures/default-requests.jsonl")
         .lines()
         .collect();
     let responses: Vec<_> = include_str!("fixtures/default-responses.jsonl")
         .lines()
         .collect();
+    assert_eq!(requests.len(), 10);
     assert_eq!(requests.len(), responses.len());
     let mut input = String::new();
     let mut expected = String::new();

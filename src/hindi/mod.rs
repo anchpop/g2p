@@ -16,10 +16,9 @@
 //! 4. assigns lexical stress with Roy's (2017) surface syllable-weight rules,
 //!    keeping the syllable spans.
 //!
-//! [`LabelVersion::Legacy`] reproduces lexide's Python output byte for byte (provider
-//! schema 5, the labels the 2026-08 corpus was built from). [`LabelVersion::Current`]
-//! adds corrections found in a 2026-09-02 audit against Wiktionary and the
-//! schwa repo's gold lists; see the [`LabelVersion`] docs.
+//! This backend emits the Current labels the deployed pronunciation model was
+//! trained on. The choice is private and shared by every
+//! public entry point; changing it requires a version bump and model rollout.
 
 mod model_data;
 
@@ -29,7 +28,47 @@ use model_data::{COEF, FEATURES, INTERCEPT, PHONS};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-pub use g2p_types::hindi::{LabelVersion, Syllable, Word};
+pub use g2p_types::hindi::{Syllable, Word};
+
+/// Which label convention to produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LabelVersion {
+    /// Historical labels, byte-identical to lexide's original Python
+    /// `schwa-stress-hin` (provider schema 5). Retained for regression tests,
+    /// not the deployed model's label inventory.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "historical labels are constructed only by regression tests"
+        )
+    )]
+    Legacy,
+    /// The deployed model's labels: Legacy plus the audited corrections:
+    /// * `/ə/` beside `/ɦ/` is `[ɛ]` (शहर, कहना, बहन, जगह) and यह/वह are
+    ///   `[jeː]`/`[ʋoː]` — Legacy wrote `ə` in 39% of corpus rows. Applied
+    ///   uniformly: it is near-categorical in the native and function words
+    ///   that carry most of those tokens, while careful readings of Sanskrit
+    ///   compounds (आग्रह, असहयोग) may keep `[ə]`; per-clip realization is
+    ///   an acoustic-narrowing question, not a G2P one;
+    /// * word-final short ɪ/ʊ are `iː`/`uː` (no length contrast there);
+    /// * anusvara before a velar is `ŋ` (संकट), as before other stops it is
+    ///   already homorganic — Legacy nasalized the vowel before क/ख only;
+    /// * ज्ञ is `[ɡj]` (ज्ञान), not `d͡ʒɲ`;
+    /// * a schwa deletion that would create an unpronounceable consonant run
+    ///   (दुश्मनों → `ʃmn`) is undone;
+    /// * digits and Latin script are an error rather than silently missing
+    ///   from the labels while present in the audio.
+    Current,
+}
+
+// The deployed checkpoint was trained on Current labels. Its training sidecar,
+// phoneme_backend_g2p-hin.jsonl, emits ज्ञ as ɡ j; Legacy emits d͡ʒ ɲ.
+// G2P must emit the trained inventory, not a caller-selected correction level.
+// A future flip must trip the source-review guard, deliberately bump the
+// version/identity, and rederive downstream data alongside the model rollout;
+// that friction is intentional.
+const MODEL_LABELS: LabelVersion = LabelVersion::Current;
 
 // ---------------------------------------------------------------------------
 // Transliteration tables (transliterate.py)
@@ -597,8 +636,19 @@ fn in_devanagari_block(c: char) -> bool {
     ('\u{0900}'..='\u{097F}').contains(&c)
 }
 
+/// Label one Devanagari word using the deployed model's label inventory.
+pub fn word(word: &str) -> Result<Word, Error> {
+    word_with_labels(word, MODEL_LABELS)
+}
+
+/// Label every Devanagari word using the deployed model's label inventory.
+/// Digits and Latin script are refused rather than leaving holes in the labels.
+pub fn phonemize(text: &str) -> Result<Vec<Word>, Error> {
+    phonemize_with_labels(text, MODEL_LABELS)
+}
+
 /// Label one Devanagari word.
-pub fn word(word: &str, labels: LabelVersion) -> Result<Word, Error> {
+fn word_with_labels(word: &str, labels: LabelVersion) -> Result<Word, Error> {
     if labels == LabelVersion::Current
         && let Some(tokens) = special_word(word)
     {
@@ -672,7 +722,7 @@ pub fn word(word: &str, labels: LabelVersion) -> Result<Word, Error> {
 /// [`Error::Unlabelable`]: they are spoken in the audio but this chain cannot
 /// phonemize them, so labels would silently be missing a stretch of speech.
 /// Legacy drops them without a word, as lexide's Python did.
-pub fn phonemize(text: &str, labels: LabelVersion) -> Result<Vec<Word>, Error> {
+fn phonemize_with_labels(text: &str, labels: LabelVersion) -> Result<Vec<Word>, Error> {
     if labels == LabelVersion::Current {
         let digits: String = text
             .chars()
@@ -697,7 +747,7 @@ pub fn phonemize(text: &str, labels: LabelVersion) -> Result<Vec<Word>, Error> {
         .split(|c: char| !in_devanagari_block(c))
         .filter(|w| !w.is_empty())
     {
-        let w = word(run, labels)?;
+        let w = word_with_labels(run, labels)?;
         if !w.phonemes.is_empty() {
             words.push(w);
         }
@@ -710,12 +760,42 @@ mod tests {
     use super::*;
 
     fn ipa(text: &str, labels: LabelVersion) -> String {
-        phonemize(text, labels)
+        phonemize_with_labels(text, labels)
             .unwrap()
             .iter()
             .map(|w| w.phonemes.join(" "))
             .collect::<Vec<_>>()
             .join(" | ")
+    }
+
+    #[test]
+    fn all_public_paths_use_the_trained_current_labels() {
+        let text = "यह शहर संकट ज्ञान दुश्मनों पति वस्तु";
+        let current = phonemize_with_labels(text, LabelVersion::Current).unwrap();
+        assert_eq!(MODEL_LABELS, LabelVersion::Current);
+        assert_eq!(phonemize(text).unwrap(), current);
+        assert_eq!(
+            word("यह").unwrap(),
+            word_with_labels("यह", LabelVersion::Current).unwrap()
+        );
+        assert_eq!(
+            crate::phonemize_lang("hin", text).unwrap(),
+            crate::hindi_phonemized(current)
+        );
+    }
+
+    #[test]
+    fn internal_legacy_labels_keep_the_complete_historical_output() {
+        let words =
+            phonemize_with_labels("यह शहर संकट ज्ञान दुश्मनों पति वस्तु", LabelVersion::Legacy).unwrap();
+        let result = crate::hindi_phonemized(words);
+        // The historical CLI used numeric stress; preserve every response field.
+        let mut actual = serde_json::to_value(&result).unwrap();
+        actual["stress"] =
+            serde_json::json!(result.stress.iter().map(|s| s.code()).collect::<Vec<_>>());
+        let expected: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/hindi-legacy.json")).unwrap();
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -778,20 +858,20 @@ mod tests {
     #[test]
     fn current_refuses_digits_and_latin() {
         assert!(matches!(
-            phonemize("19 वीं शताब्दी", LabelVersion::Current),
+            phonemize_with_labels("19 वीं शताब्दी", LabelVersion::Current),
             Err(Error::Unlabelable(r)) if r.starts_with("hindi_digits")
         ));
         assert!(matches!(
-            phonemize("AOL अपनी", LabelVersion::Current),
+            phonemize_with_labels("AOL अपनी", LabelVersion::Current),
             Err(Error::Unlabelable(r)) if r.starts_with("hindi_latin")
         ));
-        assert!(phonemize("19 वीं", LabelVersion::Legacy).is_ok());
+        assert!(phonemize_with_labels("19 वीं", LabelVersion::Legacy).is_ok());
     }
 
     #[test]
     fn stress_follows_roy_rules() {
         // हिन्दुस्तान: ɦ ɪ n d̪ ʊ s t̪ aː n — superheavy final syllable stressed.
-        let w = &phonemize("हिन्दुस्तान", LabelVersion::Legacy).unwrap()[0];
+        let w = &phonemize_with_labels("हिन्दुस्तान", LabelVersion::Legacy).unwrap()[0];
         let last = w.syllables.last().unwrap();
         assert!(last.stressed && last.moras >= 3, "{w:?}");
         assert_eq!(w.stress.len(), w.phonemes.len());

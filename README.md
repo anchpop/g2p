@@ -12,18 +12,22 @@ no `ESPEAK_NG_DATA_PATH`, no way to run against mainline espeak by mistake.
 
 ## Output
 
-`phonemize(text, voice)` returns:
+`phonemize_language(PhonemizeRequest::new(lang, text))` returns:
 
-- `raw` — espeak's IPA exactly as `espeak-ng -q --ipa -x` prints it (stress
-  marks, word boundaries), clauses joined with spaces. For humans and LLMs.
+- `raw` — for espeak-backed languages, IPA exactly as `espeak-ng -q --ipa -x` prints it
+  (stress marks, word boundaries), clauses joined with spaces. For humans and LLMs.
 - `phonemes` / `stress` / `word_spans` — versioned pronunciation-model
   labels: stress and boundaries removed, continuation diacritics folded onto
   the previous token, `ʲ` folded onto a preceding consonant, language-switch
   markers stripped, and the units below merged. See `src/parse.rs`.
 
-**0.4 changes the label inventory for the next training run.** Keep deployed
-models pinned to the g2p revision used to train them; do not replace their
-labels with these without retraining/relabeling.
+**Raw-voice and Hindi-version API knobs are removed.** Hindi retains the
+trained Current labels as its default; all existing default labels and the
+0.4.0 identity are unchanged.
+
+**0.4 introduced the espeak label inventory used by the deployed checkpoint.**
+Keep models pinned to the g2p revision used to train them; changing inventories
+requires coordinated retraining/relabeling.
 
 | espeak voice | single-token vowel units |
 |---|---|
@@ -31,6 +35,10 @@ labels with these without retraining/relabeling.
 | German (`de`) | `aɪ aʊ ɔʏ ɔø` (Häuser emits `ɔø`) |
 | Brazilian Portuguese (`pt-br`) | oral `aʊ eɪ oʊ aɪ`; nasal `ɐ̃ʊ̃ ɐ̃ɪ̃ õɪ̃ ũɪ̃` and mãe's literal `ɐ̃j` |
 | Czech (`cs`) | `eɪ oʊ aʊ` |
+
+This inventory describes engine behavior; British English and the additional
+voice/alias cases in private engine tests do not expand the public language/
+variety set.
 
 Across espeak languages, affricates `tʃ dʒ ts dz tɕ dʑ tʂ dʐ ʈʂ ɖʐ pf bv tθ dð kx ɡɣ`
 merge **only inside an actual engine phoneme**, preserving decorations such as
@@ -52,11 +60,12 @@ The engine callback captures a parallel phone-separated rendering of the
 **same** post-pitch/length phoneme list, without a second synthesis or changing
 public `raw`. Plain `parse::parse(raw)` retains legacy character segmentation:
 raw IPA cannot distinguish an affricate from two neighboring phones. Use
-`phonemize`/`phonemize_lang` for current labels.
+`phonemize_language`/`phonemize_lang` for current labels.
 
 Stress, tone and length handling are unchanged (adjacent vowels still share
-stress, even across engine-phone separators). The Hindi, Japanese, Mandarin,
-Korean and Thai backend chains are unchanged. Source fixes remove the Persian
+stress, even across engine-phone separators). The Japanese, Mandarin, Korean
+and Thai backend chains are unchanged. Hindi selection is described below;
+neither private Hindi algorithm is changed. Source fixes remove the Persian
 q1 artifact (قهوه `q1ˈahveː` → `qˈahveː`) and Russian mnemonic `^` (царь
 `tsˈɑrɪ^` → `tsˈɑrɪ`); these corrections also appear in `raw`.
 
@@ -80,7 +89,7 @@ enabled features (including Japanese availability), and downstream dependency
 resolution are not encoded. In particular, a downstream library consumer uses
 its own lockfile rather than this repository's Cargo.lock. Stamp persisted
 labels with the identity and retain the request choices (language, text,
-voice/variety, Hindi label version); identity alone is not a cache key.
+variety); identity alone is not a cache key.
 
 ## Languages
 
@@ -92,7 +101,7 @@ nothing downstream can tell.
 
 | languages | source |
 |---|---|
-| eng deu fra ita por spa rus (+ lexide's Pimsleur-era languages) | the espeak fork, one voice each |
+| eng deu fra ita por spa rus (+ lexide's Pimsleur-era languages) | the espeak fork, variety selected by g2p |
 | hin | the built-in Hindi chain (below) |
 | zho-hans | the built-in Mandarin chain (below) |
 | jpn | OpenJTalk via `jpreprocess` (below) |
@@ -101,19 +110,22 @@ nothing downstream can tell.
 
 ### Pronunciation varieties
 
-Use a language plus `Variety` rather than coupling callers to backend voice
-names. Spanish `Default` and `European` use European labels (`es`, distinción);
-`LatinAmerican` uses `es-419` (seseo). Every other language rejects non-default
-varieties with `Error::VarietyNotApplicable`. Portuguese stays `pt-br`: the
-course is Brazilian only and European recordings are excluded.
+Use a language plus `Variety`; backend voice names are private to g2p.
+`PhonemizeRequest` holds `lang`, `text`, and `variety`.
+`new(lang, text)` chooses `Variety::Default` and the trained model labels; the
+`.variety(...)` builder selects another supported reading.
 
-`PhonemizeRequest` stores one `VoiceChoice`: a variety or a raw espeak voice.
-The `.variety(...)` and `.voice(...)` setters replace that choice. Raw voices
-are an escape hatch for explicit engine access or replaying training labels,
-not a separate variety setting. Dedicated backends reject them with
-`Error::VoiceNotApplicable`; unsupported language codes remain
-`Error::UnsupportedLanguage` even with a raw voice. Raw voices are not
-cross-checked against the language's voice family.
+| language | supported varieties |
+|---|---|
+| Spanish | `Default`/`European`: distinción; `LatinAmerican`: seseo |
+| Portuguese | `Default`/`Brazilian`: Brazilian; `European`: European |
+| all other supported languages | `Default` only |
+
+Unsupported varieties return `Error::VarietyNotApplicable`; unknown language
+codes return `Error::UnsupportedLanguage`. Portuguese training rows include
+both Brazilian and European readings, so g2p supports both. Yap's Brazilian
+course excludes European clips and does not accept European learner readings;
+that is product policy, not a limitation of this engine.
 
 ### Korean
 
@@ -190,18 +202,27 @@ logistic-regression schwa-deletion classifier (aryamanarora/schwa-deletion,
 MIT; weights embedded), a unit → IPA map, and Roy's (2017) surface
 syllable-weight stress rules with syllable spans.
 
-Two label conventions, chosen with `HindiLabels`:
+Hindi always emits the deployed model's **Current** labels. There is no public
+label-version selector: unified dispatch and `hindi::phonemize(text)` /
+`hindi::word(text)` all use the same private model-label constant. The deployed
+checkpoint's training sidecar (`phoneme_backend_g2p-hin.jsonl`) emits `ज्ञ` as
+`ɡ j`, whereas the historical Legacy chain emits `d͡ʒ ɲ`.
 
-- `Legacy` is byte-identical to the Python chain on the entire lexide corpus
-  (13,086 sentences: phonemes, stress, syllables). It is what the deployed
-  pronunciation model was trained on, so it is what yap scores against.
-- `Current` adds the corrections from a 2026-09-02 audit against Wiktionary
-  and the schwa repo's gold lists: `/ə/` beside `/ɦ/` is `[ɛ]` (शहर, कहना,
-  बहन; यह/वह are `[jeː]`/`[ʋoː]`), anusvara before velars is `ŋ`, ज्ञ is
-  `[ɡj]`, word-final short ɪ/ʊ are `iː`/`uː`, and a schwa deletion that would
-  leave an unpronounceable consonant run (दुश्मनों → `ʃmn`) is undone. Text
-  with digits or Latin letters is refused (`Error::Unlabelable`) rather than
-  labeled with a hole where the audio has speech.
+This retains the former Current default, including refusal of digits and Latin
+script rather than leaving holes where audio contains speech. Removing the
+selector does not change default labels or the 0.4.0 identity. Consumers that
+explicitly selected the historical Legacy inventory must use the trained
+Current labels instead; downstream scoring/training deployment is coordinated
+by their owners rather than exposing an alternate inventory here.
+
+The detailed Legacy/Current distinction remains documented in the private
+engine enum. Both implementations retain their unit tests, and the complete
+former Legacy JSON output remains an internal regression fixture. The Current
+corrections include eligible schwa raising beside `ɦ`, final `ɪ`/`ʊ` lengthening,
+velar anusvara, `ज्ञ`, undoing impossible schwa deletions, and digits/Latin refusal.
+A future model-label constant change must trip the source-review guard,
+deliberately change the crate version/identity, and rederive downstream data
+alongside the model.
 
 ## Rust
 
@@ -213,51 +234,62 @@ Consumers that only store or transport labels can depend on `g2p-types` from
 the same repository. It has only serde as a normal dependency: no native
 engine, build script, dictionary download, or Python backend. Types remain
 re-exported from the same g2p root and backend modules; Japanese label types
-are available even without the `japanese` engine feature. The Hindi selector
-is `hindi::LabelVersion`, also exported as `HindiLabels`. `LabelSource::Espeak`
-uses `Cow<'static, str>` so static table voices allocate nothing and
-deserialized voices own their names; `LabelSource` is `Clone`, not `Copy`.
+are available even without the `japanese` engine feature. The Hindi result
+structures remain shared, but label selection is private to the engine.
+`LabelSource` is a `Copy` enum identifying the backend; `Espeak` is a unit
+variant and exposes no engine voice string.
 
 ```rust
-let p = g2p::phonemize("on est", "fr-fr")?;          // by espeak voice
+let p = g2p::phonemize_lang("fra", "on est")?;
 assert_eq!(p.phonemes, ["ɔ̃", "n", "ɛ"]);
-let h = g2p::phonemize_lang("hin", "यह शहर")?;        // by language, current labels
-let l = g2p::phonemize_lang_with("hin", "यह शहर", g2p::HindiLabels::Legacy)?;
+let h = g2p::phonemize_lang("hin", "यह शहर")?;        // trained Hindi labels
 let s = g2p::phonemize_language(
     g2p::PhonemizeRequest::new("spa", "cinco").variety(g2p::Variety::LatinAmerican),
 )?;
 assert_eq!(s.phonemes[0], "s");
 ```
 
-Voices are espeak voice names (`fr-fr`, `en-us`, `pt-br`, `cmn`, `ru`, …),
-resolved the way the CLI's `-v` resolves them. Calls are thread-safe
-(serialized on a lock; espeak has global state).
+Calls are thread-safe (serialized on a lock; espeak has global state).
+The Rust API only accepts language and typed variety selection, not raw engine
+voice strings. `Error::UnknownVoice` is an internal table/engine invariant
+diagnostic, not a caller-input error.
 
 ## Command line
 
 ```
 cargo install --git https://github.com/anchpop/g2p --locked
-g2p fr-fr "on est"           # one utterance → JSON
-g2p --lang hin "यह शहर"      # by language
-g2p identity                 # build identity
+g2p --lang fra "on est"      # one utterance → JSON
+g2p --lang hin "यह शहर"      # default Hindi labels
+g2p --lang spa --variety latin_american "cinco"
+g2p --lang por --variety european "dia noite"
+g2p identity                 # label-compatibility identity
 g2p serve                    # JSON lines on stdin/stdout, one utterance per line
 ```
 
-`serve` is how lexide's Python uses it: keep one process running and stream
-`{"text": ..., "voice": ...}` or `{"text": ..., "lang": ..., "hindi_labels": ...}`
-requests through it. Each line is exactly one utterance, so the
-clause-versus-line framing ambiguity of `espeak-ng --stdin` cannot occur.
+The CLI accepts `--lang <code> [--variety <name>] [--] <text...>`; `--` ends
+option parsing when text starts with `--`. Positional engine voice names are
+not supported.
 
-An optional `"variety"` is `"default"` (also when omitted), `"latin_american"`,
-or `"european"`, for example
-`{"text": "cinco", "lang": "spa", "variety": "latin_american"}`. A raw `voice`
-overrides variety, including a non-default variety inapplicable to `lang`.
-Voice-only requests keep the direct raw espeak path, also ignoring variety.
-Unknown variety names and null are schema errors even with a raw voice; a
-request without either `lang` or `voice` is an error, not an implicit language.
+For `serve`, new clients send `{"text": ..., "lang": ...}` with optional
+`"variety"`: `"default"` (also when omitted), `"latin_american"`, `"european"`,
+or `"brazilian"`. For example:
+`{"text": "cinco", "lang": "spa", "variety": "latin_american"}`.
 
-Responses carry `syllables` when the backend computes them, and a refusal
-comes back as `{"error": ..., "unlabelable": "reason:detail"}`.
+Until the legacy Python transport is removed, JSON requests may still carry
+`"voice"`. The adapter converts corpus voice names to a language and variety:
+`es-419` → Spanish/LatinAmerican, `es` → Spanish/European, `pt-br` →
+Portuguese/Brazilian, `pt` → Portuguese/European; other mapped corpus voices
+select their language's default. This selection wins over both supplied
+`lang` and `variety`, even if contradictory. Unmapped names fail with
+`no variety maps to voice X; only voices present in the training corpus can be replayed`.
+There is no raw-engine fallback or public Rust voice adapter. Unknown variety
+names and null remain schema errors even with a legacy voice. A request without
+either `lang` or legacy `voice` is an error, not an implicit language.
+
+Each line is exactly one utterance, so the clause-versus-line framing ambiguity
+of `espeak-ng --stdin` cannot occur. Responses carry `syllables` when the backend
+computes them, and a refusal comes back as
+`{"error": ..., "unlabelable": "reason:detail"}`.
 
 ## Building
 

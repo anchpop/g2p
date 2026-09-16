@@ -1,6 +1,7 @@
 //! End-to-end tests against the embedded espeak-ng fork. No environment
 //! setup needed: the engine and its data are inside the test binary.
 
+use crate as g2p;
 use g2p::{Stress, phonemize};
 
 fn bare(text: &str, voice: &str) -> Vec<String> {
@@ -249,5 +250,53 @@ fn explicit_ipa_ties_remain_inside_affricate_tokens() {
         assert_eq!(p.stress.len(), p.phonemes.len());
         assert_eq!(p.word_spans.last().unwrap().1, p.phonemes.len());
         assert!(p.raw.contains('͡'));
+    }
+}
+
+#[test]
+fn typed_varieties_replay_the_corresponding_engine_output() {
+    use g2p::{PhonemizeRequest, Variety, phonemize_language};
+    for (lang, variety, voice, text) in [
+        ("spa", Variety::Default, "es", "cinco"),
+        ("spa", Variety::European, "es", "cinco"),
+        ("spa", Variety::LatinAmerican, "es-419", "cinco"),
+        ("por", Variety::Default, "pt-br", "dia noite"),
+        ("por", Variety::Brazilian, "pt-br", "dia noite"),
+        ("por", Variety::European, "pt", "dia noite"),
+    ] {
+        let actual =
+            phonemize_language(PhonemizeRequest::new(lang, text).variety(variety)).unwrap();
+        let expected = phonemize(text, voice).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&actual).unwrap(),
+            serde_json::to_vec(&expected).unwrap()
+        );
+    }
+}
+
+#[test]
+fn every_mapping_is_reachable_and_defaults_preserve_engine_output() {
+    use g2p::{PhonemizeRequest, Variety, phonemize_language};
+    let mut selections = Vec::new();
+    for &(lang, variety, voice) in crate::voices::ESPEAK_VOICES {
+        assert_eq!(crate::label_source(lang), Some(g2p::LabelSource::Espeak));
+        assert_eq!(crate::variety_voice(lang, variety).unwrap(), voice);
+        assert!(
+            !selections.contains(&(lang, variety)),
+            "duplicate selection: {lang} {variety:?}"
+        );
+        selections.push((lang, variety));
+        assert!(
+            crate::voices::ESPEAK_VOICES
+                .iter()
+                .any(|(language, candidate, _)| {
+                    *language == lang && *candidate == Variety::Default
+                }),
+            "missing default for {lang}"
+        );
+        if variety == Variety::Default {
+            let actual = phonemize_language(PhonemizeRequest::new(lang, "")).unwrap();
+            assert_eq!(actual, phonemize("", voice).unwrap(), "{lang}");
+        }
     }
 }

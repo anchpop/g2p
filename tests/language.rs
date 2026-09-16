@@ -1,8 +1,5 @@
 //! Unified language dispatch preserves the existing voice and backend paths.
-use g2p::{
-    Error, HindiLabels, PhonemizeRequest, Variety, VoiceChoice, phonemize, phonemize_lang,
-    phonemize_lang_with, phonemize_language,
-};
+use g2p::{Error, PhonemizeRequest, Variety, phonemize_lang, phonemize_language};
 
 fn assert_same_bytes(left: g2p::Phonemized, right: g2p::Phonemized) {
     assert_eq!(
@@ -12,90 +9,75 @@ fn assert_same_bytes(left: g2p::Phonemized, right: g2p::Phonemized) {
 }
 
 #[test]
-fn request_defaults_and_setters_have_one_voice_choice() {
+fn request_defaults_and_variety_setter() {
     let request = PhonemizeRequest::new("spa", "cinco");
-    assert_eq!(request.hindi_labels, HindiLabels::Current);
-    assert_eq!(request.voice, VoiceChoice::Variety(Variety::Default));
+    assert_eq!(request.variety, Variety::Default);
     assert_eq!(
-        request.variety(Variety::LatinAmerican).voice("es").voice,
-        VoiceChoice::Raw("es")
-    );
-    assert_eq!(
-        request.voice("es").variety(Variety::LatinAmerican).voice,
-        VoiceChoice::Variety(Variety::LatinAmerican)
+        request.variety(Variety::LatinAmerican).variety,
+        Variety::LatinAmerican
     );
 }
 
 #[test]
-fn spanish_varieties_preserve_raw_voice_output_and_distinguish_seseo() {
-    for (variety, voice, initial) in [
-        (Variety::Default, "es", "θ"),
-        (Variety::European, "es", "θ"),
-        (Variety::LatinAmerican, "es-419", "s"),
+fn spanish_varieties_distinguish_seseo() {
+    for (variety, initial) in [
+        (Variety::Default, "θ"),
+        (Variety::European, "θ"),
+        (Variety::LatinAmerican, "s"),
     ] {
         let result =
             phonemize_language(PhonemizeRequest::new("spa", "cinco").variety(variety)).unwrap();
         assert_eq!(result.phonemes.first().unwrap(), initial);
-        assert_same_bytes(result, phonemize("cinco", voice).unwrap());
     }
 }
 
 #[test]
 fn espeak_wrappers_preserve_full_default_output() {
-    for (lang, text, voice) in [
-        ("eng", "church cats more mirror", "en-us"),
-        ("deu", "Häuser Zeit", "de"),
-        ("fra", "on est", "fr-fr"),
-        ("ita", "pizza", "it"),
-        ("por", "mãe pão", "pt-br"),
-        ("spa", "cinco", "es"),
-        ("rus", "царь", "ru"),
+    for (lang, text) in [
+        ("eng", "church cats more mirror"),
+        ("deu", "Häuser Zeit"),
+        ("fra", "on est"),
+        ("ita", "pizza"),
+        ("por", "mãe pão"),
+        ("spa", "cinco"),
+        ("rus", "царь"),
     ] {
         assert_backend_identity(lang, text);
-        assert_same_bytes(
-            phonemize_lang(lang, text).unwrap(),
-            phonemize(text, voice).unwrap(),
-        );
     }
 }
 
 fn assert_backend_identity(lang: &str, text: &str) {
     let result = phonemize_language(PhonemizeRequest::new(lang, text)).unwrap();
     assert!(!result.phonemes.is_empty());
-    assert_same_bytes(result.clone(), phonemize_lang(lang, text).unwrap());
-    // The Hindi label version is irrelevant for all other backends.
-    for labels in [HindiLabels::Current, HindiLabels::Legacy] {
-        if lang != "hin" || labels == HindiLabels::Current {
-            assert_same_bytes(
-                result.clone(),
-                phonemize_lang_with(lang, text, labels).unwrap(),
-            );
-        }
-    }
+    assert_same_bytes(result, phonemize_lang(lang, text).unwrap());
 }
 
 #[test]
-fn hindi_default_preserves_full_output() {
+fn hindi_default_remains_the_trained_current_output() {
     assert_backend_identity("hin", "यह शहर");
-    for labels in [HindiLabels::Current, HindiLabels::Legacy] {
-        let result = phonemize_language(PhonemizeRequest {
-            hindi_labels: labels,
-            ..PhonemizeRequest::new("hin", "यह शहर")
-        })
-        .unwrap();
-        assert_same_bytes(
-            result.clone(),
-            phonemize_lang_with("hin", "यह शहर", labels).unwrap(),
-        );
-        let words = g2p::hindi::phonemize("यह शहर", labels).unwrap();
-        assert_eq!(
-            result.phonemes,
-            words
-                .into_iter()
-                .flat_map(|w| w.phonemes)
-                .collect::<Vec<_>>()
-        );
-    }
+    let result = phonemize_lang("hin", "यह शहर").unwrap();
+    assert_eq!(result.phonemes, ["j", "eː", "ʃ", "ɛː", "ɦ", "ɛː", "ɾ"]);
+    let words = g2p::hindi::phonemize("यह शहर").unwrap();
+    assert_eq!(
+        result.phonemes,
+        words
+            .into_iter()
+            .flat_map(|w| w.phonemes)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(g2p::hindi::word("यह").unwrap().phonemes, ["j", "eː"]);
+    assert!(matches!(
+        phonemize_lang("hin", "19 यह AOL"),
+        Err(Error::Unlabelable(_))
+    ));
+    assert!(matches!(
+        g2p::hindi::phonemize("19 यह AOL"),
+        Err(Error::Unlabelable(_))
+    ));
+    assert_eq!(
+        g2p::hindi::word("ज्ञान").unwrap().phonemes,
+        ["ɡ", "j", "aː", "n"]
+    );
 }
 
 #[test]
@@ -132,9 +114,13 @@ fn korean_default_preserves_full_output() {
 }
 
 #[test]
-fn non_spanish_varieties_are_rejected_before_running_backends() {
-    for lang in ["eng", "fra", "por", "hin", "zho-hans", "jpn", "tha", "kor"] {
-        for variety in [Variety::LatinAmerican, Variety::European] {
+fn unsupported_varieties_are_rejected_before_running_backends() {
+    for lang in ["eng", "fra", "hin", "zho-hans", "jpn", "tha", "kor"] {
+        for variety in [
+            Variety::LatinAmerican,
+            Variety::European,
+            Variety::Brazilian,
+        ] {
             assert!(matches!(
                 phonemize_language(PhonemizeRequest::new(lang, "").variety(variety)),
                 Err(Error::VarietyNotApplicable { lang: actual_lang, variety: actual_variety })
@@ -142,51 +128,35 @@ fn non_spanish_varieties_are_rejected_before_running_backends() {
             ));
         }
     }
-}
-
-#[test]
-fn explicit_voice_replaces_even_inapplicable_variety() {
-    for lang in ["spa", "fra", "por"] {
-        for variety in [Variety::Default, Variety::LatinAmerican, Variety::European] {
-            let result = phonemize_language(
-                PhonemizeRequest::new(lang, "cinco")
-                    .variety(variety)
-                    .voice("es-419"),
-            )
-            .unwrap();
-            assert_same_bytes(result, phonemize("cinco", "es-419").unwrap());
-        }
-    }
-    assert!(matches!(
-        phonemize_language(PhonemizeRequest::new("fra", "bonjour").variety(Variety::European).voice("xx-no-such-voice")),
-        Err(Error::UnknownVoice(voice)) if voice == "xx-no-such-voice"
-    ));
-}
-
-#[test]
-fn every_backend_rejects_voice_overrides_before_running() {
-    for lang in ["hin", "zho-hans", "jpn", "tha", "kor"] {
+    for (lang, variety) in [("spa", Variety::Brazilian), ("por", Variety::LatinAmerican)] {
         assert!(matches!(
-            phonemize_language(PhonemizeRequest::new(lang, "").variety(Variety::European).voice("es-419")),
-            Err(Error::VoiceNotApplicable { lang: actual_lang, voice })
-                if actual_lang == lang && voice == "es-419"
+            phonemize_language(PhonemizeRequest::new(lang, "").variety(variety)),
+            Err(Error::VarietyNotApplicable { .. })
         ));
     }
 }
 
 #[test]
-fn unknown_language_stays_unsupported_even_with_voice_or_variety() {
-    for voice in [
-        VoiceChoice::default(),
-        VoiceChoice::Variety(Variety::LatinAmerican),
-        VoiceChoice::Variety(Variety::European),
-        VoiceChoice::Raw("es-419"),
+fn portuguese_default_is_brazilian_and_european_is_supported() {
+    let request = PhonemizeRequest::new("por", "dia noite");
+    let default = phonemize_language(request).unwrap();
+    let brazilian = phonemize_language(request.variety(Variety::Brazilian)).unwrap();
+    let european = phonemize_language(request.variety(Variety::European)).unwrap();
+    assert_same_bytes(default.clone(), brazilian);
+    assert_ne!(default.phonemes, european.phonemes);
+    assert!(!european.phonemes.is_empty());
+}
+
+#[test]
+fn unknown_language_stays_unsupported_with_every_variety() {
+    for variety in [
+        Variety::Default,
+        Variety::LatinAmerican,
+        Variety::European,
+        Variety::Brazilian,
     ] {
-        let error = phonemize_language(PhonemizeRequest {
-            voice,
-            ..PhonemizeRequest::new("xx-nope", "hello")
-        })
-        .unwrap_err();
+        let error = phonemize_language(PhonemizeRequest::new("xx-nope", "hello").variety(variety))
+            .unwrap_err();
         assert!(matches!(&error, Error::UnsupportedLanguage(lang) if lang == "xx-nope"));
         assert_eq!(
             error.to_string(),

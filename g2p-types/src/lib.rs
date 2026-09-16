@@ -7,7 +7,7 @@ pub mod mandarin;
 pub mod parse;
 pub mod thai;
 
-pub use hindi::{LabelVersion as HindiLabels, Syllable};
+pub use hindi::Syllable;
 pub use parse::{Parsed, Stress};
 
 /// Tokyo pitch-accent factor for one mora-bearing phone (Japanese).
@@ -61,11 +61,10 @@ pub struct Phonemized {
 /// labels disagree about the phoneme inventory, and nothing downstream can
 /// tell (Hindi scored against espeak `hi` measured as the worst language by
 /// a wide margin before this was understood).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LabelSource {
-    /// Our espeak-ng fork, with this voice. Table entries can borrow static
-    /// names; deserialization owns the name without requiring static input.
-    Espeak(std::borrow::Cow<'static, str>),
+    /// Our espeak-ng fork. Voice selection is private to the engine.
+    Espeak,
     /// The ported `schwa-stress-hin` chain ([`hindi`]).
     Hindi,
     /// The ported g2pM + pinyin-to-IPA chain ([`mandarin`]).
@@ -81,15 +80,17 @@ pub enum LabelSource {
 }
 
 /// A language's pronunciation variety, independent of backend voice names.
-/// Currently only Spanish accepts a non-default variety.
+/// Currently Spanish and Portuguese accept non-default varieties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Variety {
     /// Preserve the language's established default labels.
     #[default]
     Default,
-    /// Spanish with seseo (espeak `es-419`).
+    /// Latin American Spanish with seseo.
     LatinAmerican,
-    /// European Spanish with distinción (espeak `es`).
+    /// European Spanish (distinción) or European Portuguese.
     European,
+    /// Brazilian Portuguese.
+    Brazilian,
 }
