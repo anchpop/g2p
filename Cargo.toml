@@ -24,6 +24,7 @@ default = ["japanese"]
 japanese = ["dep:jpreprocess"]
 
 [dependencies]
+g2p-types = { path = "g2p-types" }
 dirs = "6"
 # OpenJTalk rewritten in Rust, with the NAIST dictionary built in: the
 # Japanese label source (see src/japanese). Optional because the embedded
@@ -41,3 +42,8 @@ cmake = "0.1"
 walkdir = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 zstd = "0.13"
+
+[workspace]
+members = ["g2p-types"]
+default-members = [".", "g2p-types"]
+resolver = "3"

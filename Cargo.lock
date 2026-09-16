@@ -493,6 +493,7 @@ version = "0.4.0"
 dependencies = [
  "cmake",
  "dirs",
+ "g2p-types",
  "jpreprocess",
  "libc",
  "serde",
@@ -502,6 +503,14 @@ dependencies = [
  "walkdir",
  "xxhash-rust",
  "zstd",
+]
+
+[[package]]
+name = "g2p-types"
+version = "0.4.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

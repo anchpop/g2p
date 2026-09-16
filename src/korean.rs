@@ -60,19 +60,7 @@ const MECAB_SHIM: &str = include_str!("../python/korean/mecab.py");
 /// [`crate::identity`].
 pub const KOREAN_DIGEST: &str = env!("G2P_KOREAN_DIGEST");
 
-/// One utterance's labels.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Labels {
-    /// The pronunciation as post-sandhi Hangul, one token per input word,
-    /// clauses separated by ` | ` (값이 안 좋아, 라디오 → "갑씨 안 조아 |
-    /// 라디오"). Readable; not for scoring.
-    pub raw: String,
-    pub phonemes: Vec<String>,
-    /// All `None`: Korean has no lexical stress.
-    pub stress: Vec<crate::Stress>,
-    /// `[start, end)` per input word (어절).
-    pub word_spans: Vec<(usize, usize)>,
-}
+pub use g2p_types::korean::Labels;
 
 struct Server {
     _child: Child,

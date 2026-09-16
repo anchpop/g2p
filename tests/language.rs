@@ -30,7 +30,10 @@ fn hindi_default_preserves_full_output() {
     assert_backend_identity("hin", "यह शहर");
     for labels in [HindiLabels::Current, HindiLabels::Legacy] {
         let result = phonemize_language("hin", None, "यह शहर", labels).unwrap();
-        assert_eq!(result, phonemize_lang_with("hin", "यह शहर", labels).unwrap());
+        assert_eq!(
+            result,
+            phonemize_lang_with("hin", "यह शहर", labels).unwrap()
+        );
         let words = g2p::hindi::phonemize("यह शहर", labels).unwrap();
         assert_eq!(
             result.phonemes,
@@ -88,7 +91,8 @@ fn every_backend_rejects_voice_overrides_before_running() {
 #[test]
 fn unknown_language_stays_unsupported_even_with_voice() {
     for voice in [None, Some("es-419")] {
-        let error = phonemize_language("xx-nope", voice, "hello", HindiLabels::Current).unwrap_err();
+        let error =
+            phonemize_language("xx-nope", voice, "hello", HindiLabels::Current).unwrap_err();
         assert!(matches!(&error, Error::UnsupportedLanguage(lang) if lang == "xx-nope"));
         assert_eq!(
             error.to_string(),

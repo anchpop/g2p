@@ -179,6 +179,15 @@ Two label conventions, chosen with `HindiLabels`:
 g2p = { git = "https://github.com/anchpop/g2p", rev = "..." }
 ```
 
+Consumers that only store or transport labels can depend on `g2p-types` from
+the same repository. It has only serde as a normal dependency: no native
+engine, build script, dictionary download, or Python backend. Types remain
+re-exported from the same g2p root and backend modules; Japanese label types
+are available even without the `japanese` engine feature. The Hindi selector
+is `hindi::LabelVersion`, also exported as `HindiLabels`. `LabelSource::Espeak`
+uses `Cow<'static, str>` so static table voices allocate nothing and
+deserialized voices own their names; `LabelSource` is `Clone`, not `Copy`.
+
 ```rust
 let p = g2p::phonemize("on est", "fr-fr")?;          // by espeak voice
 assert_eq!(p.phonemes, ["ɔ̃", "n", "ɛ"]);

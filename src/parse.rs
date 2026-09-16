@@ -24,7 +24,7 @@
 //!   these are stripped before tokenizing. Left in, the parentheses would be
 //!   junk tokens and the letters would pass as real phonemes.
 
-use serde::{Deserialize, Serialize};
+pub use g2p_types::parse::{Parsed, Stress};
 
 /// IPA vowels (monophthongs and near-variants espeak emits across our
 /// languages). Vowels carry stress; `ʲ` never folds onto one.
@@ -36,35 +36,6 @@ pub const IPA_VOWELS: &str = "iyɨʉɯuɪʏʊeøɘɵɤoəɛœɜɞʌɔæɐaɶɑɒ
 pub const CONTINUATIONS: &str = "ːˑ̠̞̯̥̪̩̝̃̊̈ˤ";
 
 pub const WORD_BOUNDARIES: &str = " \t\n|_-";
-
-/// Lexical stress of a token, as espeak marked it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Stress {
-    None,
-    Primary,
-    Secondary,
-}
-
-impl Stress {
-    /// The integer code lexide's corpus files use (0/1/2).
-    pub fn code(self) -> u8 {
-        match self {
-            Stress::None => 0,
-            Stress::Primary => 1,
-            Stress::Secondary => 2,
-        }
-    }
-}
-
-/// A parsed utterance. `phonemes` and `stress` are parallel; each
-/// `word_spans` entry is a half-open `[start, end)` index range into them
-/// for one word espeak emitted (empty words are dropped).
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct Parsed {
-    pub phonemes: Vec<String>,
-    pub stress: Vec<Stress>,
-    pub word_spans: Vec<(usize, usize)>,
-}
 
 fn is_vowel(c: char) -> bool {
     IPA_VOWELS.contains(c)
