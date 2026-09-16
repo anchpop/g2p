@@ -9,11 +9,11 @@
 //! is a rule table over them. g2pk (Kyubyong Park; g2pk2 is its maintained
 //! fork, the one Korean TTS stacks and Montreal Forced Aligner use) matches
 //! Wiktionary on 95.6% of words, independently of Wiktionary's own module,
-//! and is the only one that also gets ㄴ-insertion (꽃잎 [꼰닙]) and the
-//! morphologically conditioned tensification (넘다 [넘따], 할 것 [할껏]),
+//! and is the only one that also gets ㄴ-insertion (꽃잎 `[꼰닙]`) and the
+//! morphologically conditioned tensification (넘다 `[넘따]`, 할 것 `[할껏]`),
 //! because it tags the sentence with mecab-ko first. The remaining ~4% is
 //! lexical — Sino-Korean compounds whose ㄹ tensifies the next consonant
-//! unpredictably (결점 [결쩜]) — and needs a dictionary, not rules.
+//! unpredictably (결점 `[결쩜]`) — and needs a dictionary, not rules.
 //!
 //! Not ported: the rule table and the mecab dictionary are large and the
 //! wrapper is small. `python/korean/` is a `uv` project pinning `g2pk2`,
@@ -26,11 +26,11 @@
 //!
 //! The labels target real, connected speech. Within a clause the sound
 //! changes apply across the spaces between 어절 exactly as they do inside a
-//! word — 못 만났어 [몬만나써], 부엌 좀 [부억쫌], 할 것 [할껏] — because a
+//! word — 못 만났어 `[몬만나써]`, 부엌 좀 `[부억쫌]`, 할 것 `[할껏]` — because a
 //! speaker does not pause there and that is what the audio contains.
 //! Punctuation is where speakers pause, so the text is split into clauses
 //! at every punctuation mark and each clause is phonemized on its own:
-//! 안녕, 라디오 stays [안녕 라디오] instead of g2pk's whole-string [나디오].
+//! 안녕, 라디오 stays `[안녕 라디오]` instead of g2pk's whole-string `[나디오]`.
 //!
 //! Label set (phonemic; what the model is trained to hear): lenis stops and
 //! affricate `k t p tɕ`, aspirated `kʰ tʰ pʰ tɕʰ`, tense `k͈ t͈ p͈ tɕ͈ s͈`,

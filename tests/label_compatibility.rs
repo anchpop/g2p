@@ -4,7 +4,7 @@ use std::path::Path;
 use xxhash_rust::xxh3::Xxh3;
 
 const REVIEWED_VERSION: &str = "0.4.0";
-const REVIEWED_SOURCE_DIGEST: &str = "ef234d19b74bd453";
+const REVIEWED_SOURCE_DIGEST: &str = "507eb7c365ecd48e";
 
 fn label_source_digest(root: &Path) -> String {
     // Include all files, not just Rust: Mandarin weights/vocabulary are label

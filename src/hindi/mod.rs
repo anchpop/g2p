@@ -210,7 +210,7 @@ fn transliterate(word: &str, labels: LabelVersion) -> Result<Vec<Unit>, Error> {
 /// Words whose nukta-less फ is a native aspirated stop /pʰ/. Everything else
 /// defaults to /f/: a 2026-08-24 listening audit found the Perso-Arabic and
 /// English loans that make up most फ tokens (काफी, फिल्म, सिर्फ, फोन) are
-/// categorically [f], while careful orthography's nukta is mostly dropped.
+/// categorically `[f]`, while careful orthography's nukta is mostly dropped.
 const NATIVE_PH_PREFIXES: &[&str] = &[
     "फिर",
     "फल",
@@ -478,9 +478,9 @@ fn restore_illegal_deletions(units: &[Unit], retained: &mut [bool]) {
 }
 
 /// `/ə/` next to `/ɦ/` surfaces as `[ɛ]` in Standard Hindi when the `ɦ`
-/// closes the syllable or sits between two schwas: शहर [ʃɛɦɛr], कहना
-/// [kɛɦnaː], बहन [bɛɦɛn], जगह [d͡ʒəɡɛɦ]. It stays `[ə]` before an `ɦ` that
-/// is followed by a full vowel: पहाड़ [pəɦaːɽ], कहानी [kəɦaːniː]. Written as
+/// closes the syllable or sits between two schwas: शहर `[ʃɛɦɛr]`, कहना
+/// `[kɛɦnaː]`, बहन `[bɛɦɛn]`, जगह `[d͡ʒəɡɛɦ]`. It stays `[ə]` before an `ɦ` that
+/// is followed by a full vowel: पहाड़ `[pəɦaːɽ]`, कहानी `[kəɦaːniː]`. Written as
 /// `ɛː`, the chain's only open-mid front vowel.
 fn raise_schwa_beside_h(tokens: &mut [String]) {
     let is_h = |t: &str| t == "ɦ";
@@ -507,7 +507,7 @@ fn raise_schwa_beside_h(tokens: &mut [String]) {
 }
 
 /// Word-final short /ɪ/ and /ʊ/ have no short/long contrast in Hindi and
-/// surface tense, as [i]/[u] (पति [pət̪i], वस्तु [ʋəst̪u]). Both reference
+/// surface tense, as `[i]`/`[u]` (पति `[pət̪i]`, वस्तु `[ʋəst̪u]`). Both reference
 /// lists transcribe them long; the chain wrote the orthographic short vowel.
 fn neutralize_final_high_vowels(tokens: &mut [String]) {
     if let Some(last) = tokens.last_mut() {
