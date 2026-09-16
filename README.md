@@ -160,7 +160,7 @@ logistic-regression schwa-deletion classifier (aryamanarora/schwa-deletion,
 MIT; weights embedded), a unit → IPA map, and Roy's (2017) surface
 syllable-weight stress rules with syllable spans.
 
-Two label conventions, chosen with `HindiCanon`:
+Two label conventions, chosen with `HindiLabels`:
 
 - `Legacy` is byte-identical to the Python chain on the entire lexide corpus
   (13,086 sentences: phonemes, stress, syllables). It is what the deployed
@@ -182,8 +182,8 @@ g2p = { git = "https://github.com/anchpop/g2p", rev = "..." }
 ```rust
 let p = g2p::phonemize("on est", "fr-fr")?;          // by espeak voice
 assert_eq!(p.phonemes, ["ɔ̃", "n", "ɛ"]);
-let h = g2p::phonemize_lang("hin", "यह शहर")?;        // by language, current canon
-let l = g2p::phonemize_lang_with("hin", "यह शहर", g2p::HindiCanon::Legacy)?;
+let h = g2p::phonemize_lang("hin", "यह शहर")?;        // by language, current labels
+let l = g2p::phonemize_lang_with("hin", "यह शहर", g2p::HindiLabels::Legacy)?;
 ```
 
 Voices are espeak voice names (`fr-fr`, `en-us`, `pt-br`, `cmn`, `ru`, …),
@@ -201,7 +201,7 @@ g2p serve                    # JSON lines on stdin/stdout, one utterance per lin
 ```
 
 `serve` is how lexide's Python uses it: keep one process running and stream
-`{"text": ..., "voice": ...}` or `{"text": ..., "lang": ..., "canon": ...}`
+`{"text": ..., "voice": ...}` or `{"text": ..., "lang": ..., "hindi_labels": ...}`
 requests through it. Each line is exactly one utterance, so the
 clause-versus-line framing ambiguity of `espeak-ng --stdin` cannot occur.
 Responses carry `syllables` when the backend computes them, and a refusal

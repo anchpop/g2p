@@ -16,10 +16,10 @@
 //! 4. assigns lexical stress with Roy's (2017) surface syllable-weight rules,
 //!    keeping the syllable spans.
 //!
-//! [`Canon::Legacy`] reproduces lexide's Python output byte for byte (provider
-//! schema 5, the labels the 2026-08 corpus was built from). [`Canon::Current`]
+//! [`Labels::Legacy`] reproduces lexide's Python output byte for byte (provider
+//! schema 5, the labels the 2026-08 corpus was built from). [`Labels::Current`]
 //! adds corrections found in a 2026-09-02 audit against Wiktionary and the
-//! schwa repo's gold lists; see the [`Canon`] docs.
+//! schwa repo's gold lists; see the [`Labels`] docs.
 
 mod model_data;
 
@@ -32,7 +32,7 @@ use std::sync::OnceLock;
 /// Which label convention to produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Canon {
+pub enum Labels {
     /// Byte-identical to lexide's `schwa-stress-hin` (provider schema 5): what
     /// the deployed pronunciation model was trained on. Use this to score
     /// against that model.
@@ -183,13 +183,13 @@ fn nukta(unit: Unit) -> Unit {
 /// How anusvara assimilates to the following unit. `None` is the Python
 /// `KeyError` (anusvara before a vowel or another mark), which failed the
 /// whole utterance there and does here too.
-fn nasal_assimilation(next: Unit, canon: Canon) -> Option<Unit> {
+fn nasal_assimilation(next: Unit, labels: Labels) -> Option<Unit> {
     Some(match next {
         // Legacy nasalized the vowel before क/ख but wrote ŋ before ग/घ; the
         // nasal is homorganic before every velar stop (संकट [səŋkəʈ]).
-        "k" | "kh" => match canon {
-            Canon::Legacy => "~",
-            Canon::Current => "ng",
+        "k" | "kh" => match labels {
+            Labels::Legacy => "~",
+            Labels::Current => "ng",
         },
         "g" | "gh" | "ng" | "Gh" => "ng",
         "c" | "ch" | "j" | "n" | "tt" | "tth" | "dd" | "ddh" | "t" | "th" | "d" | "dh" | "sh"
@@ -202,9 +202,9 @@ fn nasal_assimilation(next: Unit, canon: Canon) -> Option<Unit> {
 }
 
 /// Devanagari word → Google-scheme units with every inherent schwa present.
-fn transliterate(word: &str, canon: Canon) -> Result<Vec<Unit>, Error> {
+fn transliterate(word: &str, labels: Labels) -> Result<Vec<Unit>, Error> {
     let mut text = word.replace('ऋ', "रि").replace('ृ', "्रि");
-    if canon == Canon::Current {
+    if labels == Labels::Current {
         // ज्ञ is pronounced [ɡj] in Hindi (ज्ञान = gyaan), not [d͡ʒɲ].
         text = text.replace("ज्ञ", "ग्य");
     }
@@ -239,7 +239,7 @@ fn transliterate(word: &str, canon: Canon) -> Result<Vec<Unit>, Error> {
         if res[i] == "ng" {
             res[i] = match res.get(i + 1) {
                 None => "~",
-                Some(next) => nasal_assimilation(next, canon).ok_or_else(|| {
+                Some(next) => nasal_assimilation(next, labels).ok_or_else(|| {
                     Error::Unlabelable(format!("anusvara before {next:?} in {word:?}"))
                 })?,
             };
@@ -431,7 +431,7 @@ fn is_vowel_unit(u: Unit) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Current-canon corrections
+// Corrections for current labels
 // ---------------------------------------------------------------------------
 
 /// Undo schwa deletions that leave a consonant run no Hindi syllable
@@ -643,8 +643,8 @@ fn in_devanagari_block(c: char) -> bool {
 }
 
 /// Label one Devanagari word.
-pub fn word(word: &str, canon: Canon) -> Result<Word, Error> {
-    if canon == Canon::Current
+pub fn word(word: &str, labels: Labels) -> Result<Word, Error> {
+    if labels == Labels::Current
         && let Some(tokens) = special_word(word)
     {
         let phonemes: Vec<String> = tokens.iter().map(|t| t.to_string()).collect();
@@ -656,7 +656,7 @@ pub fn word(word: &str, canon: Canon) -> Result<Word, Error> {
             schwa_retained: Vec::new(),
         });
     }
-    let mut units = transliterate(word, canon)?;
+    let mut units = transliterate(word, labels)?;
     if units.contains(&"ph") && !ph_is_native(word) {
         for u in &mut units {
             if *u == "ph" {
@@ -670,7 +670,7 @@ pub fn word(word: &str, canon: Canon) -> Result<Word, Error> {
         .filter(|(_, u)| **u == "a")
         .map(|(i, _)| schwa_retained(&units, i))
         .collect();
-    if canon == Canon::Current {
+    if labels == Labels::Current {
         restore_illegal_deletions(&units, &mut retained);
     }
     let mut phonemes: Vec<String> = Vec::with_capacity(units.len());
@@ -697,7 +697,7 @@ pub fn word(word: &str, canon: Canon) -> Result<Word, Error> {
             phonemes.push(ipa.to_string());
         }
     }
-    if canon == Canon::Current {
+    if labels == Labels::Current {
         raise_schwa_beside_h(&mut phonemes);
         neutralize_final_high_vowels(&mut phonemes);
     }
@@ -713,12 +713,12 @@ pub fn word(word: &str, canon: Canon) -> Result<Word, Error> {
 /// Label every Devanagari word in `text` (maximal runs of the Devanagari
 /// block, as lexide splits them). Words that produce no phonemes are dropped.
 ///
-/// Under [`Canon::Current`], digits or Latin letters in the text are an
+/// Under [`Labels::Current`], digits or Latin letters in the text are an
 /// [`Error::Unlabelable`]: they are spoken in the audio but this chain cannot
 /// phonemize them, so labels would silently be missing a stretch of speech.
 /// Legacy drops them without a word, as lexide's Python did.
-pub fn phonemize(text: &str, canon: Canon) -> Result<Vec<Word>, Error> {
-    if canon == Canon::Current {
+pub fn phonemize(text: &str, labels: Labels) -> Result<Vec<Word>, Error> {
+    if labels == Labels::Current {
         let digits: String = text
             .chars()
             .filter(|c| c.is_ascii_digit() || ('०'..='९').contains(c))
@@ -742,7 +742,7 @@ pub fn phonemize(text: &str, canon: Canon) -> Result<Vec<Word>, Error> {
         .split(|c: char| !in_devanagari_block(c))
         .filter(|w| !w.is_empty())
     {
-        let w = word(run, canon)?;
+        let w = word(run, labels)?;
         if !w.phonemes.is_empty() {
             words.push(w);
         }
@@ -754,8 +754,8 @@ pub fn phonemize(text: &str, canon: Canon) -> Result<Vec<Word>, Error> {
 mod tests {
     use super::*;
 
-    fn ipa(text: &str, canon: Canon) -> String {
-        phonemize(text, canon)
+    fn ipa(text: &str, labels: Labels) -> String {
+        phonemize(text, labels)
             .unwrap()
             .iter()
             .map(|w| w.phonemes.join(" "))
@@ -766,77 +766,77 @@ mod tests {
     #[test]
     fn legacy_matches_the_python_chain_on_known_words() {
         // Values taken from running lexide's `_schwa_stress_hin` directly.
-        assert_eq!(ipa("यह", Canon::Legacy), "j ə ɦ");
-        assert_eq!(ipa("संकट", Canon::Legacy), "s ə̃ k ə ʈ");
-        assert_eq!(ipa("ज्ञान", Canon::Legacy), "d͡ʒ ɲ aː n");
-        assert_eq!(ipa("दुश्मनों", Canon::Legacy), "d̪ ʊ ʃ m n oː̃");
-        assert_eq!(ipa("ज़्यादा", Canon::Legacy), "z j aː d̪ aː");
-        assert_eq!(ipa("सच्ची", Canon::Legacy), "s ə t͡ʃ t͡ʃ iː");
-        assert_eq!(ipa("उन्नीस", Canon::Legacy), "ʊ n n iː s");
+        assert_eq!(ipa("यह", Labels::Legacy), "j ə ɦ");
+        assert_eq!(ipa("संकट", Labels::Legacy), "s ə̃ k ə ʈ");
+        assert_eq!(ipa("ज्ञान", Labels::Legacy), "d͡ʒ ɲ aː n");
+        assert_eq!(ipa("दुश्मनों", Labels::Legacy), "d̪ ʊ ʃ m n oː̃");
+        assert_eq!(ipa("ज़्यादा", Labels::Legacy), "z j aː d̪ aː");
+        assert_eq!(ipa("सच्ची", Labels::Legacy), "s ə t͡ʃ t͡ʃ iː");
+        assert_eq!(ipa("उन्नीस", Labels::Legacy), "ʊ n n iː s");
         assert_eq!(
-            ipa("Avant, je n'aimais pas les épinards.", Canon::Legacy),
+            ipa("Avant, je n'aimais pas les épinards.", Labels::Legacy),
             ""
         );
     }
 
     #[test]
     fn loan_ph_is_f_unless_native() {
-        assert_eq!(ipa("फ़ोन", Canon::Legacy), "f oː n");
-        assert_eq!(ipa("फोन", Canon::Legacy), "f oː n");
-        assert_eq!(ipa("फल", Canon::Legacy), "pʰ ə l");
+        assert_eq!(ipa("फ़ोन", Labels::Legacy), "f oː n");
+        assert_eq!(ipa("फोन", Labels::Legacy), "f oː n");
+        assert_eq!(ipa("फल", Labels::Legacy), "pʰ ə l");
     }
 
     #[test]
     fn current_raises_schwa_beside_h() {
-        assert_eq!(ipa("शहर", Canon::Current), "ʃ ɛː ɦ ɛː ɾ");
-        assert_eq!(ipa("कहना", Canon::Current), "k ɛː ɦ n aː");
-        assert_eq!(ipa("बहन", Canon::Current), "b ɛː ɦ ɛː n");
-        assert_eq!(ipa("जगह", Canon::Current), "d͡ʒ ə ɡ ɛː ɦ");
+        assert_eq!(ipa("शहर", Labels::Current), "ʃ ɛː ɦ ɛː ɾ");
+        assert_eq!(ipa("कहना", Labels::Current), "k ɛː ɦ n aː");
+        assert_eq!(ipa("बहन", Labels::Current), "b ɛː ɦ ɛː n");
+        assert_eq!(ipa("जगह", Labels::Current), "d͡ʒ ə ɡ ɛː ɦ");
         // Not before a full vowel.
-        assert_eq!(ipa("पहाड़", Canon::Current), "p ə ɦ aː ɽ");
-        assert_eq!(ipa("कहानी", Canon::Current), "k ə ɦ aː n iː");
-        assert_eq!(ipa("यह वह", Canon::Current), "j eː | ʋ oː");
+        assert_eq!(ipa("पहाड़", Labels::Current), "p ə ɦ aː ɽ");
+        assert_eq!(ipa("कहानी", Labels::Current), "k ə ɦ aː n iː");
+        assert_eq!(ipa("यह वह", Labels::Current), "j eː | ʋ oː");
     }
 
     #[test]
     fn current_neutralizes_final_high_vowels() {
-        assert_eq!(ipa("पति", Canon::Current), "p ə t̪ iː");
-        assert_eq!(ipa("वस्तु", Canon::Current), "ʋ ə s t̪ uː");
-        assert_eq!(ipa("पति", Canon::Legacy), "p ə t̪ ɪ");
+        assert_eq!(ipa("पति", Labels::Current), "p ə t̪ iː");
+        assert_eq!(ipa("वस्तु", Labels::Current), "ʋ ə s t̪ uː");
+        assert_eq!(ipa("पति", Labels::Legacy), "p ə t̪ ɪ");
         // Only word-finally.
-        assert_eq!(ipa("किताब", Canon::Current), "k ɪ t̪ aː b");
+        assert_eq!(ipa("किताब", Labels::Current), "k ɪ t̪ aː b");
     }
 
     #[test]
     fn current_fixes_velar_nasal_and_jn() {
-        assert_eq!(ipa("संकट", Canon::Current), "s ə ŋ k ə ʈ");
-        assert_eq!(ipa("ज्ञान", Canon::Current), "ɡ j aː n");
+        assert_eq!(ipa("संकट", Labels::Current), "s ə ŋ k ə ʈ");
+        assert_eq!(ipa("ज्ञान", Labels::Current), "ɡ j aː n");
     }
 
     #[test]
     fn current_restores_impossible_deletions() {
-        assert_eq!(ipa("दुश्मनों", Canon::Current), "d̪ ʊ ʃ m ə n oː̃");
+        assert_eq!(ipa("दुश्मनों", Labels::Current), "d̪ ʊ ʃ m ə n oː̃");
         // Conjunct runs are left alone.
-        assert_eq!(ipa("संस्कृत", Canon::Current), "s ə n s k ɾ ɪ t̪");
+        assert_eq!(ipa("संस्कृत", Labels::Current), "s ə n s k ɾ ɪ t̪");
     }
 
     #[test]
     fn current_refuses_digits_and_latin() {
         assert!(matches!(
-            phonemize("19 वीं शताब्दी", Canon::Current),
+            phonemize("19 वीं शताब्दी", Labels::Current),
             Err(Error::Unlabelable(r)) if r.starts_with("hindi_digits")
         ));
         assert!(matches!(
-            phonemize("AOL अपनी", Canon::Current),
+            phonemize("AOL अपनी", Labels::Current),
             Err(Error::Unlabelable(r)) if r.starts_with("hindi_latin")
         ));
-        assert!(phonemize("19 वीं", Canon::Legacy).is_ok());
+        assert!(phonemize("19 वीं", Labels::Legacy).is_ok());
     }
 
     #[test]
     fn stress_follows_roy_rules() {
         // हिन्दुस्तान: ɦ ɪ n d̪ ʊ s t̪ aː n — superheavy final syllable stressed.
-        let w = &phonemize("हिन्दुस्तान", Canon::Legacy).unwrap()[0];
+        let w = &phonemize("हिन्दुस्तान", Labels::Legacy).unwrap()[0];
         let last = w.syllables.last().unwrap();
         assert!(last.stressed && last.moras >= 3, "{w:?}");
         assert_eq!(w.stress.len(), w.phonemes.len());

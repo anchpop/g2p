@@ -12,8 +12,8 @@
 //! ```
 //!
 //! Request:  `{"text": "on est", "voice": "fr-fr"}` or
-//!           `{"text": "यह शहर", "lang": "hin", "canon": "legacy"}`
-//!           (`canon` is optional and only affects Hindi; default `current`).
+//!           `{"text": "यह शहर", "lang": "hin", "hindi_labels": "legacy"}`
+//!           (`hindi_labels` is optional and only affects Hindi; default `current`).
 //!           `voice` may accompany `lang` as a dialect/voice override, e.g.
 //!           `{"text": "zapato", "lang": "spa", "voice": "es-419"}`.
 //! Response: `{"raw": "ɔ̃ nˈɛ", "phonemes": ["ɔ̃","n","ɛ"], "stress": [0,0,1],
@@ -37,7 +37,7 @@ struct Request {
     #[serde(default)]
     lang: Option<String>,
     #[serde(default)]
-    canon: Option<g2p::HindiCanon>,
+    hindi_labels: Option<g2p::HindiLabels>,
 }
 
 #[derive(serde::Serialize)]
@@ -95,7 +95,7 @@ fn handle(req: Request) -> Response {
             &lang,
             voice.as_deref(),
             &req.text,
-            req.canon.unwrap_or(g2p::HindiCanon::Current),
+            req.hindi_labels.unwrap_or(g2p::HindiLabels::Current),
         )),
         _ => Response::Err {
             error: "request needs exactly one of `voice` or `lang`".into(),
@@ -134,14 +134,14 @@ mod tests {
     }
 
     #[test]
-    fn language_canon_is_preserved() {
+    fn language_labels_are_preserved() {
         let expected = Response::from(g2p::phonemize_lang_with(
             "hin",
             "यह शहर",
-            g2p::HindiCanon::Legacy,
+            g2p::HindiLabels::Legacy,
         ));
         assert_eq!(
-            response(json!({"text": "यह शहर", "lang": "hin", "canon": "legacy"})),
+            response(json!({"text": "यह शहर", "lang": "hin", "hindi_labels": "legacy"})),
             serde_json::to_value(expected).unwrap()
         );
     }

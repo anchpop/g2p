@@ -38,7 +38,7 @@ pub mod mandarin;
 pub mod parse;
 pub mod thai;
 
-pub use hindi::{Canon as HindiCanon, Syllable};
+pub use hindi::{Labels as HindiLabels, Syllable};
 
 /// Tokyo pitch-accent factor for one mora-bearing phone (Japanese).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -265,25 +265,25 @@ pub fn label_source(lang: &str) -> Option<LabelSource> {
 }
 
 /// Phonemize `text` as language `lang` (see [`label_source`]), with the
-/// current Hindi canon and the language's default voice/backend.
+/// current Hindi labels and the language's default voice/backend.
 pub fn phonemize_lang(lang: &str, text: &str) -> Result<Phonemized, Error> {
-    phonemize_language(lang, None, text, HindiCanon::Current)
+    phonemize_language(lang, None, text, HindiLabels::Current)
 }
 
-/// [`phonemize_lang`] with an explicit Hindi label canon (irrelevant for
+/// [`phonemize_lang`] with an explicit choice of Hindi labels (irrelevant for
 /// other languages).
-pub fn phonemize_lang_with(lang: &str, text: &str, canon: HindiCanon) -> Result<Phonemized, Error> {
-    phonemize_language(lang, None, text, canon)
+pub fn phonemize_lang_with(lang: &str, text: &str, labels: HindiLabels) -> Result<Phonemized, Error> {
+    phonemize_language(lang, None, text, labels)
 }
 
 /// Phonemize `text` as language `lang`, optionally overriding its default
 /// voice/dialect. Languages using a dedicated backend reject voice overrides
-/// with [`Error::VoiceNotApplicable`]. `canon` only affects Hindi.
+/// with [`Error::VoiceNotApplicable`]. `labels` only affects Hindi.
 pub fn phonemize_language(
     lang: &str,
     voice: Option<&str>,
     text: &str,
-    canon: HindiCanon,
+    labels: HindiLabels,
 ) -> Result<Phonemized, Error> {
     match label_source(lang) {
         Some(LabelSource::Espeak(default_voice)) => phonemize(text, voice.unwrap_or(default_voice)),
@@ -291,7 +291,7 @@ pub fn phonemize_language(
             lang: lang.to_string(),
             voice: voice.unwrap().to_string(),
         }),
-        Some(LabelSource::Hindi) => Ok(hindi_phonemized(hindi::phonemize(text, canon)?)),
+        Some(LabelSource::Hindi) => Ok(hindi_phonemized(hindi::phonemize(text, labels)?)),
         Some(LabelSource::Mandarin) => Ok(mandarin_phonemized(mandarin::phonemize(text)?)),
         #[cfg(feature = "japanese")]
         Some(LabelSource::Japanese) => Ok(japanese_phonemized(japanese::phonemize(text)?)),
