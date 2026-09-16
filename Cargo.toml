@@ -47,3 +47,7 @@ zstd = "0.13"
 members = ["g2p-types"]
 default-members = [".", "g2p-types"]
 resolver = "3"
+
+[dev-dependencies]
+walkdir = "2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }

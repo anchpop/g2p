@@ -58,9 +58,17 @@ pub const ESPEAK_DIGEST: &str = env!("G2P_ESPEAK_DIGEST");
 /// [`identity`] for cache keys.
 pub const ESPEAK_COMMIT: &str = env!("G2P_ESPEAK_COMMIT");
 
-/// Identifies *which* phonemizer produced an output: crate version plus the
-/// espeak source digest. Stamp cached or persisted phoneme data with this so
-/// output from a different build can never pose as current.
+/// Label-compatibility identifier: crate version plus the espeak and pinned
+/// Python backend digests. Rust label changes require an intentional crate
+/// version bump; the source-digest regression test forces that review.
+/// Label-preserving API/comment changes may refresh the test baseline without
+/// changing this identifier.
+///
+/// Not a complete build fingerprint: toolchain, platform, environment, enabled
+/// features (including Japanese availability), and downstream dependency
+/// resolution are not encoded. This crate's Cargo.lock is not enforced by
+/// downstream library consumers. Cache keys must also include the request
+/// (language, text, voice/variety, and Hindi label version).
 pub fn identity() -> String {
     format!(
         "g2p/{} espeak-ng/{ESPEAK_DIGEST} thai/{} korean/{}",

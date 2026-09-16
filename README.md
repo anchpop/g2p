@@ -64,9 +64,23 @@ Output is byte-identical to the CLI because it runs the same code path (a
 silent synthesis with the phoneme trace on), not the `espeak_TextToPhonemes`
 shortcut, which skips the pitch/length passes and differs on tone languages.
 
-`identity()` includes the crate version and a digest of every fork source file
-that affects output (including local source edits). Stamp persisted phoneme
-data with it.
+`identity()` is a label-compatibility identifier: crate version plus source
+digests for the espeak fork and pinned Thai/Korean Python projects. Rust label
+changes require an intentional crate version bump. The checked-in source-digest
+regression test (`tests/label_compatibility.rs`) forces review of edits to the
+engine/shared source trees (including Mandarin model data), manifests, lockfile,
+and build script. Whole-file bytes are intentional: even comments trigger review.
+For label-preserving changes, verify output and refresh the reviewed digest; for
+label changes, bump the crate version and refresh both version/digest baselines.
+The test digest is not included in the runtime identity, so API-only refactors
+do not invalidate compatible deployed labels.
+
+This is not a complete build fingerprint. Toolchain, platform, environment,
+enabled features (including Japanese availability), and downstream dependency
+resolution are not encoded. In particular, a downstream library consumer uses
+its own lockfile rather than this repository's Cargo.lock. Stamp persisted
+labels with the identity and retain the request choices (language, text,
+voice/variety, Hindi label version); identity alone is not a cache key.
 
 ## Languages
 
