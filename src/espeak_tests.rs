@@ -2,10 +2,10 @@
 //! setup needed: the engine and its data are inside the test binary.
 
 use crate as g2p;
-use g2p::{Stress, phonemize};
+use g2p::{Stress, phonemize_espeak};
 
 fn bare(text: &str, voice: &str) -> Vec<String> {
-    phonemize(text, voice).unwrap().phonemes
+    phonemize_espeak(text, voice).unwrap().phonemes
 }
 
 #[test]
@@ -21,7 +21,7 @@ fn french_liaison_is_phrase_level() {
 
 #[test]
 fn raw_keeps_boundaries_and_stress() {
-    let r = phonemize("on est là", "fr-fr").unwrap();
+    let r = phonemize_espeak("on est là", "fr-fr").unwrap();
     assert!(r.raw.contains(' '), "{:?}", r.raw);
     assert!(r.raw.contains('ˈ'), "{:?}", r.raw);
     assert!(!r.raw.contains('\n'));
@@ -41,7 +41,7 @@ fn leading_dash_is_text_not_options() {
 fn commas_do_not_split_an_utterance() {
     // espeak emits one line per clause; the crate joins them back into one
     // utterance, so a comma sentence yields one result, not two.
-    let r = phonemize("Oui, bien sûr.", "fr-fr").unwrap();
+    let r = phonemize_espeak("Oui, bien sûr.", "fr-fr").unwrap();
     assert!(r.word_spans.len() >= 3, "{r:?}");
 }
 
@@ -59,7 +59,7 @@ fn empty_and_punctuation_only_input_is_ok() {
 #[test]
 fn unknown_voice_is_an_error() {
     assert!(matches!(
-        phonemize("hello", "xx-nope"),
+        phonemize_espeak("hello", "xx-nope"),
         Err(g2p::Error::UnknownVoice(_))
     ));
     // And the engine still works afterwards.
@@ -68,10 +68,10 @@ fn unknown_voice_is_an_error() {
 
 #[test]
 fn switching_voices_leaves_no_state_behind() {
-    let a1 = phonemize("Je ne sais pas.", "fr-fr").unwrap();
-    let _ = phonemize("I don't know.", "en-us").unwrap();
-    let _ = phonemize("Я не знаю.", "ru").unwrap();
-    let a2 = phonemize("Je ne sais pas.", "fr-fr").unwrap();
+    let a1 = phonemize_espeak("Je ne sais pas.", "fr-fr").unwrap();
+    let _ = phonemize_espeak("I don't know.", "en-us").unwrap();
+    let _ = phonemize_espeak("Я не знаю.", "ru").unwrap();
+    let a2 = phonemize_espeak("Je ne sais pas.", "fr-fr").unwrap();
     assert_eq!(a1, a2);
 }
 
@@ -79,7 +79,7 @@ fn switching_voices_leaves_no_state_behind() {
 fn language_switch_markers_do_not_leak_letters() {
     // A loanword makes espeak switch voices mid-sentence and bracket it as
     // "(en)…(fr)"; neither the parentheses nor the codes may become tokens.
-    let r = phonemize("le football", "fr-fr").unwrap();
+    let r = phonemize_espeak("le football", "fr-fr").unwrap();
     assert!(!r.phonemes.iter().any(|p| p == "(" || p == ")"), "{r:?}");
 }
 
@@ -94,7 +94,7 @@ fn russian_palatalization_is_one_token() {
 fn mandarin_has_tones() {
     // Tone marks come from the pitch pass the CLI runs; the shortcut
     // `espeak_TextToPhonemes` API would miss tone sandhi.
-    let r = phonemize("你好", "cmn").unwrap();
+    let r = phonemize_espeak("你好", "cmn").unwrap();
     assert!(!r.phonemes.is_empty(), "{r:?}");
 }
 
@@ -168,24 +168,24 @@ fn requested_words_use_merged_inventory() {
         ("fa", "چای", "tʃ"),
         ("ar", "جميل", "dʒ"),
     ] {
-        let p = phonemize(text, voice).unwrap();
+        let p = phonemize_espeak(text, voice).unwrap();
         assert!(
             p.phonemes.iter().any(|p| p == unit),
             "{voice} {text}: {p:?}, expected {unit}"
         );
         assert_eq!(p.phonemes.len(), p.stress.len());
         assert_eq!(p.word_spans.last().unwrap().1, p.phonemes.len());
-        assert_eq!(p.raw, g2p::phonemize_raw(text, voice).unwrap());
+        assert_eq!(p.raw, g2p::phonemize_espeak_raw(text, voice).unwrap());
         assert!(!p.raw.contains('\u{1f}'));
     }
 }
 
 #[test]
 fn source_artifacts_are_fixed_and_digits_are_preserved() {
-    let fa = phonemize("قهوه", "fa").unwrap();
+    let fa = phonemize_espeak("قهوه", "fa").unwrap();
     assert_eq!(fa.raw, "qˈahveː");
     assert_eq!(fa.phonemes, ["q", "a", "h", "v", "eː"]);
-    let ru = phonemize("царь", "ru").unwrap();
+    let ru = phonemize_espeak("царь", "ru").unwrap();
     assert_eq!(ru.raw, "tsˈɑrɪ");
     assert_eq!(ru.phonemes, ["ts", "ɑ", "r", "ɪ"]);
     assert_eq!(g2p::parse::parse("q1 ɪ^").phonemes, ["q", "1", "ɪ"]);
@@ -193,15 +193,15 @@ fn source_artifacts_are_fixed_and_digits_are_preserved() {
 
 #[test]
 fn actual_phone_and_word_boundaries_protect_clusters_and_onsets() {
-    let p = phonemize("cat ship", "en-us").unwrap();
+    let p = phonemize_espeak("cat ship", "en-us").unwrap();
     assert!(!p.phonemes.iter().any(|p| p == "tʃ"), "{p:?}");
-    let p = phonemize("cats", "en-us").unwrap();
+    let p = phonemize_espeak("cats", "en-us").unwrap();
     assert!(!p.phonemes.iter().any(|p| p == "ts"), "{p:?}");
     for word in ["mirror", "hero"] {
-        let p = phonemize(word, "en-us").unwrap();
+        let p = phonemize_espeak(word, "en-us").unwrap();
         assert!(!p.phonemes.iter().any(|p| p == "ɪɹ"), "{p:?}");
     }
-    let p = phonemize("day my. Boy now!", "en-us").unwrap();
+    let p = phonemize_espeak("day my. Boy now!", "en-us").unwrap();
     assert_eq!(p.word_spans.len(), 4, "{p:?}");
     let mut end = 0;
     for (start, next) in p.word_spans {
@@ -245,7 +245,7 @@ fn explicit_ipa_ties_remain_inside_affricate_tokens() {
         ),
         ("ps", "چای", vec!["t͡ʃ", "aː", "iː"]),
     ] {
-        let p = phonemize(text, voice).unwrap();
+        let p = phonemize_espeak(text, voice).unwrap();
         assert_eq!(p.phonemes, expected, "{voice} {text}: {p:?}");
         assert_eq!(p.stress.len(), p.phonemes.len());
         assert_eq!(p.word_spans.last().unwrap().1, p.phonemes.len());
@@ -254,50 +254,39 @@ fn explicit_ipa_ties_remain_inside_affricate_tokens() {
 }
 
 #[test]
-fn typed_varieties_replay_the_corresponding_engine_output() {
-    use g2p::{PhonemizeRequest, Variety, phonemize_language};
-    for (lang, variety, voice, text) in [
-        ("spa", Variety::Default, "es", "cinco"),
-        ("spa", Variety::European, "es", "cinco"),
-        ("spa", Variety::LatinAmerican, "es-419", "cinco"),
-        ("por", Variety::Default, "pt-br", "dia noite"),
-        ("por", Variety::Brazilian, "pt-br", "dia noite"),
-        ("por", Variety::European, "pt", "dia noite"),
+fn typed_languages_replay_the_corresponding_engine_output() {
+    use g2p::{Language, phonemize};
+    for (language, voice, text) in [
+        (Language::SpanishEuro, "es", "cinco"),
+        (Language::SpanishLatinAmerica, "es-419", "cinco"),
+        (Language::PortugueseBrazil, "pt-br", "dia noite"),
+        (Language::PortugueseEuro, "pt", "dia noite"),
     ] {
-        let actual =
-            phonemize_language(PhonemizeRequest::new(lang, text).variety(variety)).unwrap();
-        let expected = phonemize(text, voice).unwrap();
         assert_eq!(
-            serde_json::to_vec(&actual).unwrap(),
-            serde_json::to_vec(&expected).unwrap()
+            phonemize(language, text).unwrap(),
+            phonemize_espeak(text, voice).unwrap()
         );
     }
 }
 
 #[test]
-fn every_mapping_is_reachable_and_defaults_preserve_engine_output() {
-    use g2p::{PhonemizeRequest, Variety, phonemize_language};
+fn every_mapping_is_reachable() {
     let mut selections = Vec::new();
-    for &(lang, variety, voice) in crate::voices::ESPEAK_VOICES {
-        assert_eq!(crate::label_source(lang), Some(g2p::LabelSource::Espeak));
-        assert_eq!(crate::variety_voice(lang, variety).unwrap(), voice);
-        assert!(
-            !selections.contains(&(lang, variety)),
-            "duplicate selection: {lang} {variety:?}"
+    for &(language, voice) in crate::voices::ESPEAK_VOICES {
+        assert_eq!(
+            crate::label_source(language.code()),
+            Some(g2p::LabelSource::Espeak)
         );
-        selections.push((lang, variety));
+        assert_eq!(crate::engine_voice(language), voice);
         assert!(
-            crate::voices::ESPEAK_VOICES
-                .iter()
-                .any(|(language, candidate, _)| {
-                    *language == lang && *candidate == Variety::Default
-                }),
-            "missing default for {lang}"
+            !selections.contains(&language),
+            "duplicate selection: {language:?}"
         );
-        if variety == Variety::Default {
-            let actual = phonemize_language(PhonemizeRequest::new(lang, "")).unwrap();
-            assert_eq!(actual, phonemize("", voice).unwrap(), "{lang}");
-        }
+        selections.push(language);
+        assert_eq!(
+            g2p::phonemize(language, "").unwrap(),
+            phonemize_espeak("", voice).unwrap()
+        );
     }
 }
 

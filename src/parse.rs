@@ -87,7 +87,7 @@ fn marker_len(s: &[char]) -> Option<usize> {
 }
 
 /// Parse unframed `--ipa -x` output with legacy character segmentation.
-/// Use [`crate::phonemize_language`] for current model labels: it also reads the
+/// Use [`crate::phonemize`] for current model labels: it also reads the
 /// engine's phoneme boundaries, which cannot be recovered from raw IPA.
 pub fn parse(raw: &str) -> Parsed {
     parse_impl(raw, None)

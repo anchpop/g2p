@@ -1,4 +1,4 @@
-//! The command line accepts language/variety, never a positional engine voice.
+//! The command line accepts a combined language, never a positional engine voice.
 use std::process::Command;
 
 fn run(args: &[&str]) -> std::process::Output {
@@ -22,16 +22,12 @@ fn phonemes(args: &[&str]) -> serde_json::Value {
 
 #[test]
 fn cli_selects_spanish_and_portuguese_varieties() {
-    let spanish_default = phonemes(&["--lang", "spa", "cinco"]);
-    let european = phonemes(&["--lang", "spa", "--variety", "european", "cinco"]);
-    let latin = phonemes(&["--lang", "spa", "--variety", "latin_american", "cinco"]);
-    assert_eq!(spanish_default, european);
+    let european = phonemes(&["--lang", "spa-ES", "cinco"]);
+    let latin = phonemes(&["--lang", "spa-419", "cinco"]);
     assert_eq!(european[0], "θ");
     assert_eq!(latin[0], "s");
-    let portuguese_default = phonemes(&["--lang", "por", "dia", "noite"]);
-    let brazilian = phonemes(&["--lang", "por", "--variety", "brazilian", "dia", "noite"]);
-    let european = phonemes(&["--lang", "por", "--variety", "european", "dia", "noite"]);
-    assert_eq!(portuguese_default, brazilian);
+    let brazilian = phonemes(&["--lang", "por-BR", "dia", "noite"]);
+    let european = phonemes(&["--lang", "por-PT", "dia", "noite"]);
     assert_ne!(brazilian, european);
 }
 

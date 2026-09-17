@@ -12,7 +12,7 @@ no `ESPEAK_NG_DATA_PATH`, no way to run against mainline espeak by mistake.
 
 ## Output
 
-`phonemize_language(PhonemizeRequest::new(lang, text))` returns:
+`phonemize(language, text)` returns:
 
 - `raw` — for espeak-backed languages, IPA exactly as `espeak-ng -q --ipa -x` prints it
   (stress marks, word boundaries), clauses joined with spaces. For humans and LLMs.
@@ -73,7 +73,7 @@ The engine callback captures a parallel phone-separated rendering of the
 **same** post-pitch/length phoneme list, without a second synthesis or changing
 public `raw`. Plain `parse::parse(raw)` retains legacy character segmentation:
 raw IPA cannot distinguish an affricate from two neighboring phones. Use
-`phonemize_language`/`phonemize_lang` for current labels.
+`phonemize`/`phonemize_lang` for current labels.
 
 Stress and tone handling are unchanged (adjacent vowels still share
 stress, even across engine-phone separators). Length is preserved except for
@@ -124,22 +124,17 @@ nothing downstream can tell.
 
 ### Pronunciation varieties
 
-Use a language plus `Variety`; backend voice names are private to g2p.
-`PhonemizeRequest` holds `lang`, `text`, and `variety`.
-`new(lang, text)` chooses `Variety::Default` and the trained model labels; the
-`.variety(...)` builder selects another supported reading.
+Use `phonemize(Language, text)`. `Language` is defined in the lightweight
+`g2p-types` crate and re-exported by g2p and lexide. It selects the language and
+pronunciation variety together, for example `SpanishEuro`, `SpanishLatinAmerica`,
+`PortugueseBrazil`, or `PortugueseEuro`. Backend voice names stay inside g2p.
 
-| language | supported varieties |
-|---|---|
-| Spanish | `Default`/`European`: distinción; `LatinAmerican`: seseo |
-| Portuguese | `Default`/`Brazilian`: Brazilian; `European`: European |
-| all other supported languages | `Default` only |
+`Language::code()` groups regional variants under the same language code for
+text analysis. `Language::from_code()` resolves language-only input using the
+established defaults: European Spanish and Brazilian Portuguese.
 
-Unsupported varieties return `Error::VarietyNotApplicable`; unknown language
-codes return `Error::UnsupportedLanguage`. Portuguese training rows include
-both Brazilian and European readings, so g2p supports both. Yap's Brazilian
-course excludes European clips and does not accept European learner readings;
-that is product policy, not a limitation of this engine.
+The language-only `phonemize_lang` helper remains for yap and resolves its code
+to the same typed implementation. The Rust API has no separate variety selector.
 
 ### Korean
 
@@ -238,18 +233,15 @@ structures remain shared, but label selection is private to the engine.
 variant and exposes no engine voice string.
 
 ```rust
-let p = g2p::phonemize_lang("fra", "on est")?;
+let p = g2p::phonemize(g2p::Language::French, "on est")?;
 assert_eq!(p.phonemes, ["ɔ̃", "n", "ɛ"]);
-let h = g2p::phonemize_lang("hin", "यह शहर")?;        // trained Hindi labels
-let s = g2p::phonemize_language(
-    g2p::PhonemizeRequest::new("spa", "cinco").variety(g2p::Variety::LatinAmerican),
-)?;
+let h = g2p::phonemize(g2p::Language::Hindi, "यह शहर")?;        // trained Hindi labels
+let s = g2p::phonemize(g2p::Language::SpanishLatinAmerica, "cinco")?;
 assert_eq!(s.phonemes[0], "s");
 ```
 
 Calls are thread-safe (serialized on a lock; espeak has global state).
-The Rust API only accepts language and typed variety selection, not raw engine
-voice strings. `Error::UnknownVoice` is an internal table/engine invariant
+The Rust API selects pronunciation with the combined language enum. `Error::UnknownVoice` is an internal table/engine invariant
 diagnostic, not a caller-input error.
 
 ## Command line
@@ -258,31 +250,22 @@ diagnostic, not a caller-input error.
 cargo install --git https://github.com/anchpop/g2p --locked
 g2p --lang fra "on est"      # one utterance → JSON
 g2p --lang hin "यह शहर"      # default Hindi labels
-g2p --lang spa --variety latin_american "cinco"
-g2p --lang por --variety european "dia noite"
+g2p --lang spa-419 "cinco"
+g2p --lang por-PT "dia noite"
 g2p identity                 # label-compatibility identity
 g2p serve                    # JSON lines on stdin/stdout, one utterance per line
 ```
 
-The CLI accepts `--lang <code> [--variety <name>] [--] <text...>`; `--` ends
-option parsing when text starts with `--`. Positional engine voice names are
-not supported.
+The CLI accepts `--lang <language> [--] <text...>`; `--` ends option parsing
+when text starts with `--`.
 
-For `serve`, new clients send `{"text": ..., "lang": ...}` with optional
-`"variety"`: `"default"` (also when omitted), `"latin_american"`, `"european"`,
-or `"brazilian"`. For example:
-`{"text": "cinco", "lang": "spa", "variety": "latin_american"}`.
+For `serve`, send `{"text": "cinco", "lang": "spa-419"}`. `lang` deserializes
+directly to the shared `Language` enum. Ordinary languages use their ISO 639-3
+code (plus `zho-hans`); Spanish and Portuguese require an explicit region:
+`spa-ES`, `spa-419`, `por-BR`, or `por-PT`.
 
-Until the legacy Python transport is removed, JSON requests may still carry
-`"voice"`. The adapter converts corpus voice names to a language and variety:
-`es-419` → Spanish/LatinAmerican, `es` → Spanish/European, `pt-br` →
-Portuguese/Brazilian, `pt` → Portuguese/European; other mapped corpus voices
-select their language's default. This selection wins over both supplied
-`lang` and `variety`, even if contradictory. Unmapped names fail with
-`no variety maps to voice X; only voices present in the training corpus can be replayed`.
-There is no raw-engine fallback or public Rust voice adapter. Unknown variety
-names and null remain schema errors even with a legacy voice. A request without
-either `lang` or legacy `voice` is an error, not an implicit language.
+`voice`, `variety`, unknown fields, and unsupported language values are rejected.
+There is no raw-engine voice adapter in the external API.
 
 Each line is exactly one utterance, so the clause-versus-line framing ambiguity
 of `espeak-ng --stdin` cannot occur. Responses carry `syllables` when the backend

@@ -3,11 +3,13 @@
 pub mod hindi;
 pub mod japanese;
 pub mod korean;
+mod language;
 pub mod mandarin;
 pub mod parse;
 pub mod thai;
 
 pub use hindi::Syllable;
+pub use language::Language;
 pub use parse::{Parsed, Stress};
 
 /// Tokyo pitch-accent factor for one mora-bearing phone (Japanese).
@@ -77,20 +79,4 @@ pub enum LabelSource {
     /// g2pk2 + mecab-ko, run as an embedded pinned Python project
     /// ([`korean`]); needs `uv` at runtime.
     Korean,
-}
-
-/// A language's pronunciation variety, independent of backend voice names.
-/// Currently Spanish and Portuguese accept non-default varieties.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Variety {
-    /// Preserve the language's established default labels.
-    #[default]
-    Default,
-    /// Latin American Spanish with seseo.
-    LatinAmerican,
-    /// European Spanish (distinción) or European Portuguese.
-    European,
-    /// Brazilian Portuguese.
-    Brazilian,
 }

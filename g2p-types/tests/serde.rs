@@ -114,17 +114,17 @@ fn all_shared_labels_roundtrip_without_engines() {
 }
 
 #[test]
-fn varieties_use_snake_case() {
-    use g2p_types::Variety;
-    assert_eq!(Variety::default(), Variety::Default);
-    for (variety, name) in [
-        (Variety::Default, "default"),
-        (Variety::LatinAmerican, "latin_american"),
-        (Variety::European, "european"),
-        (Variety::Brazilian, "brazilian"),
+fn languages_serialize_as_explicit_pronunciation_choices() {
+    use g2p_types::Language;
+    for (language, name) in [
+        (Language::English, "eng"),
+        (Language::SpanishEuro, "spa-ES"),
+        (Language::SpanishLatinAmerica, "spa-419"),
+        (Language::PortugueseBrazil, "por-BR"),
+        (Language::PortugueseEuro, "por-PT"),
     ] {
-        assert_eq!(serde_json::to_value(variety).unwrap(), name);
-        roundtrip(variety);
+        assert_eq!(serde_json::to_value(language).unwrap(), name);
+        roundtrip(language);
     }
-    assert!(serde_json::from_str::<Variety>("\"LatinAmerican\"").is_err());
+    assert!(serde_json::from_str::<Language>("\"spa\"").is_err());
 }

@@ -45,7 +45,7 @@ pub mod mandarin;
 pub mod parse;
 pub mod thai;
 
-pub use g2p_types::{LabelSource, Phonemized, Pitch, Variety};
+pub use g2p_types::{LabelSource, Language, Phonemized, Pitch};
 pub use hindi::Syllable;
 
 pub use parse::{Parsed, Stress};
@@ -71,7 +71,7 @@ pub const ESPEAK_COMMIT: &str = env!("G2P_ESPEAK_COMMIT");
 /// features (including Japanese availability), and downstream dependency
 /// resolution are not encoded. This crate's Cargo.lock is not enforced by
 /// downstream library consumers. Cache keys must also include the request
-/// (language, text, and variety).
+/// (language and text).
 pub fn identity() -> String {
     format!(
         "g2p/{} espeak-ng/{ESPEAK_DIGEST} thai/{} korean/{}",
@@ -104,9 +104,6 @@ pub enum Error {
     Unlabelable(String),
     #[error("no G2P backend for language {0:?}")]
     UnsupportedLanguage(String),
-    /// The language has no labels for this non-default variety.
-    #[error("variety {variety:?} is not applicable to language {lang:?}")]
-    VarietyNotApplicable { lang: String, variety: Variety },
     /// An out-of-process backend (Thai's Python project) could not be
     /// started or died; the message says what to install.
     #[error("G2P backend unavailable: {0}")]
@@ -119,8 +116,8 @@ pub enum Error {
 /// the text is one utterance.
 ///
 /// Thread-safe (espeak-ng has global state; calls serialize on a lock).
-fn phonemize(text: &str, voice: &str) -> Result<Phonemized, Error> {
-    let (raw, framed, language) = phonemize_traces(text, voice)?;
+fn phonemize_espeak(text: &str, voice: &str) -> Result<Phonemized, Error> {
+    let (raw, framed, language) = phonemize_espeak_traces(text, voice)?;
     let Parsed {
         phonemes,
         stress,
@@ -140,11 +137,11 @@ fn phonemize(text: &str, voice: &str) -> Result<Phonemized, Error> {
 
 /// Just espeak's IPA string for `text` (clauses joined with single spaces).
 #[cfg(test)]
-fn phonemize_raw(text: &str, voice: &str) -> Result<String, Error> {
-    Ok(phonemize_traces(text, voice)?.0)
+fn phonemize_espeak_raw(text: &str, voice: &str) -> Result<String, Error> {
+    Ok(phonemize_espeak_traces(text, voice)?.0)
 }
 
-fn phonemize_traces(text: &str, voice: &str) -> Result<(String, String, String), Error> {
+fn phonemize_espeak_traces(text: &str, voice: &str) -> Result<(String, String, String), Error> {
     let mut guard = engine()?;
     let engine = guard.as_mut().expect("engine() initializes the engine");
     engine.select_voice(voice)?;
@@ -176,7 +173,7 @@ pub fn label_source(lang: &str) -> Option<LabelSource> {
         "kor" => Korean,
         _ if voices::ESPEAK_VOICES
             .iter()
-            .any(|(language, _, _)| *language == lang) =>
+            .any(|(language, _)| language.code() == lang) =>
         {
             Espeak
         }
@@ -184,47 +181,19 @@ pub fn label_source(lang: &str) -> Option<LabelSource> {
     })
 }
 
-/// Borrowed input to the phonemizer. Use [`Self::new`] for established defaults.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[must_use]
-pub struct PhonemizeRequest<'a> {
-    pub lang: &'a str,
-    pub text: &'a str,
-    pub variety: Variety,
-}
-
-impl<'a> PhonemizeRequest<'a> {
-    pub fn new(lang: &'a str, text: &'a str) -> Self {
-        Self {
-            lang,
-            text,
-            variety: Variety::Default,
-        }
-    }
-
-    /// Select the language's pronunciation variety.
-    pub fn variety(mut self, variety: Variety) -> Self {
-        self.variety = variety;
-        self
-    }
-}
-
-/// Phonemize `text` as language `lang` (see [`label_source`]), with the
-/// trained Hindi labels and the language's default variety/backend.
+/// Phonemize a language-only code using its established pronunciation default.
+/// Use [`phonemize`] to select an explicit regional pronunciation.
 pub fn phonemize_lang(lang: &str, text: &str) -> Result<Phonemized, Error> {
-    phonemize_language(PhonemizeRequest::new(lang, text))
+    let language =
+        Language::from_code(lang).ok_or_else(|| Error::UnsupportedLanguage(lang.to_string()))?;
+    phonemize(language, text)
 }
 
-/// Phonemize a language with typed pronunciation selection.
-/// Spanish defaults to European labels; Portuguese defaults to Brazilian.
-/// Unsupported varieties return [`Error::VarietyNotApplicable`], and unknown
-/// language codes always return [`Error::UnsupportedLanguage`].
-pub fn phonemize_language(request: PhonemizeRequest<'_>) -> Result<Phonemized, Error> {
-    let PhonemizeRequest {
-        lang,
-        text,
-        variety,
-    } = request;
+/// Phonemize with an explicit language–variety choice.
+/// The shared enum only represents supported combinations; no separate
+/// variety or backend selection is needed.
+pub fn phonemize(language: Language, text: &str) -> Result<Phonemized, Error> {
+    let lang = language.code();
     let source = label_source(lang).ok_or_else(|| Error::UnsupportedLanguage(lang.to_string()))?;
     // English corpus records can contain Korean instructional speech. Do not
     // let eSpeak silently route that speech through its Korean voice.
@@ -243,11 +212,7 @@ pub fn phonemize_language(request: PhonemizeRequest<'_>) -> Result<Phonemized, E
     }
 
     match source {
-        LabelSource::Espeak => phonemize(text, variety_voice(lang, variety)?),
-        _ if variety != Variety::Default => Err(Error::VarietyNotApplicable {
-            lang: lang.to_string(),
-            variety,
-        }),
+        LabelSource::Espeak => phonemize_espeak(text, engine_voice(language)),
         LabelSource::Hindi => Ok(hindi_phonemized(hindi::phonemize(text)?)),
         LabelSource::Mandarin => Ok(mandarin_phonemized(mandarin::phonemize(text)?)),
         #[cfg(feature = "japanese")]
@@ -259,15 +224,12 @@ pub fn phonemize_language(request: PhonemizeRequest<'_>) -> Result<Phonemized, E
     }
 }
 
-fn variety_voice(lang: &str, variety: Variety) -> Result<&'static str, Error> {
+fn engine_voice(language: Language) -> &'static str {
     voices::ESPEAK_VOICES
         .iter()
-        .find(|(language, candidate, _)| *language == lang && *candidate == variety)
-        .map(|(_, _, voice)| *voice)
-        .ok_or_else(|| Error::VarietyNotApplicable {
-            lang: lang.to_string(),
-            variety,
-        })
+        .find(|(candidate, _)| *candidate == language)
+        .map(|(_, voice)| *voice)
+        .expect("eSpeak language has a private voice mapping")
 }
 
 /// Korean labels in the common shape: no stress, no tone, the post-sandhi
