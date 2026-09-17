@@ -21,8 +21,8 @@ no `ESPEAK_NG_DATA_PATH`, no way to run against mainline espeak by mistake.
   the previous token, `ʲ` folded onto a preceding consonant, language-switch
   markers stripped, and the units below merged. See `src/parse.rs`.
 
-**Raw-voice and Hindi-version API knobs are removed.** Hindi retains the
-trained Current labels as its default.
+**Raw-voice and Hindi-version API knobs are removed.** Hindi uses the
+pronunciation rules described below.
 
 **0.5 makes g2p the owner of pronunciation normalization.** Consumers use the
 returned phones directly. English exact `ɐ`/`ᵻ` become `ə`; French loanword
@@ -216,27 +216,11 @@ logistic-regression schwa-deletion classifier (aryamanarora/schwa-deletion,
 MIT; weights embedded), a unit → IPA map, and Roy's (2017) surface
 syllable-weight stress rules with syllable spans.
 
-Hindi always emits the deployed model's **Current** labels. There is no public
-label-version selector: unified dispatch and `hindi::phonemize(text)` /
-`hindi::word(text)` all use the same private model-label constant. The deployed
-checkpoint's training sidecar (`phoneme_backend_g2p-hin.jsonl`) emits `ज्ञ` as
-`ɡ j`, whereas the historical Legacy chain emits `d͡ʒ ɲ`.
-
-This retains the former Current default, including refusal of digits and Latin
-script rather than leaving holes where audio contains speech. Removing the
-selector did not change Hindi default labels. Consumers that
-explicitly selected the historical Legacy inventory must use the trained
-Current labels instead; downstream scoring/training deployment is coordinated
-by their owners rather than exposing an alternate inventory here.
-
-The detailed Legacy/Current distinction remains documented in the private
-engine enum. Both implementations retain their unit tests, and the complete
-former Legacy JSON output remains an internal regression fixture. The Current
-corrections include eligible schwa raising beside `ɦ`, final `ɪ`/`ʊ` lengthening,
-velar anusvara, `ज्ञ`, undoing impossible schwa deletions, and digits/Latin refusal.
-A future model-label constant change must trip the source-review guard,
-deliberately change the crate version/identity, and rederive downstream data
-alongside the model.
+Hindi uses one set of pronunciation rules across unified dispatch,
+`hindi::phonemize(text)` and `hindi::word(text)`: eligible schwa raising beside
+`ɦ`, final `ɪ`/`ʊ` lengthening, velar anusvara, `ज्ञ` as `ɡ j`, and restoration
+of impossible schwa deletions. Digits and Latin script are explicitly refused
+rather than leaving holes in the labels. There is no label-version selector.
 
 ## Rust
 

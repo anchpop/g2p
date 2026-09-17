@@ -35,6 +35,7 @@ use std::io::{BufRead, Write};
 use std::os::fd::FromRawFd;
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Request {
     text: String,
     #[serde(default)]
@@ -245,17 +246,18 @@ mod tests {
     }
 
     #[test]
-    fn hindi_always_emits_the_trained_current_labels() {
+    fn hindi_emits_the_supported_labels() {
         let result = response(json!({"text": "यह शहर", "lang": "hin"}));
         assert_eq!(
             result["phonemes"],
             json!(["j", "eː", "ʃ", "ɛː", "ɦ", "ɛː", "ɾ"])
         );
-        // Removed options have no effect, like other unknown JSON fields.
-        assert_eq!(
-            result,
-            response(json!({"text": "यह शहर", "lang": "hin", "hindi_labels": "legacy"}))
-        );
+        // Obsolete selectors must fail instead of silently changing intent.
+        for field in ["canon", "hindi_labels"] {
+            let mut request = json!({"text": "यह शहर", "lang": "hin"});
+            request[field] = json!("legacy");
+            assert!(serde_json::from_value::<Request>(request).is_err());
+        }
     }
 
     #[test]

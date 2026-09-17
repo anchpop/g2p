@@ -1,8 +1,5 @@
-//! Ten public outputs captured before the shared-type extraction: all non-Hindi
-//! bytes and the Current Hindi row are unchanged. Hindi still defaults to the
-//! trained Current labels; its selector is now private. The eleventh, historical
-//! Legacy output lives in hindi-legacy.json and is checked by an internal Hindi
-//! test; it is no longer a public option.
+//! Regression fixtures for the unified phonemization output.
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 
