@@ -226,6 +226,22 @@ pub fn phonemize_language(request: PhonemizeRequest<'_>) -> Result<Phonemized, E
         variety,
     } = request;
     let source = label_source(lang).ok_or_else(|| Error::UnsupportedLanguage(lang.to_string()))?;
+    // English corpus records can contain Korean instructional speech. Do not
+    // let eSpeak silently route that speech through its Korean voice.
+    if lang == "eng"
+        && text.chars().any(|c| {
+            matches!(c,
+                '\u{1100}'..='\u{11ff}' | '\u{3130}'..='\u{318f}' |
+                '\u{a960}'..='\u{a97f}' | '\u{ac00}'..='\u{d7af}' |
+                '\u{d7b0}'..='\u{d7ff}' | '\u{ffa0}'..='\u{ffdc}'
+            )
+        })
+    {
+        return Err(Error::Unlabelable(
+            "english_hangul:request contains Korean text".into(),
+        ));
+    }
+
     match source {
         LabelSource::Espeak => phonemize(text, variety_voice(lang, variety)?),
         _ if variety != Variety::Default => Err(Error::VarietyNotApplicable {

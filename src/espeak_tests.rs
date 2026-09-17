@@ -300,3 +300,19 @@ fn every_mapping_is_reachable_and_defaults_preserve_engine_output() {
         }
     }
 }
+
+#[test]
+fn english_refuses_hangul_instead_of_switching_to_korean() {
+    for text in [
+        "아니요, 그렇지만 그것은 충분해요. Listen and repeat.",
+        "Hello ᄀ",
+        "Hello ㄱ",
+        "Hello ꥠ",
+        "Hello ힰ",
+        "Hello ﾡ",
+    ] {
+        assert!(matches!(g2p::phonemize_lang("eng", text),
+            Err(g2p::Error::Unlabelable(reason)) if reason.starts_with("english_hangul:")));
+    }
+    assert!(g2p::phonemize_lang("eng", "Listen and repeat.").is_ok());
+}

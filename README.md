@@ -33,7 +33,9 @@ punctuation/syllable separators and their attached modifiers are omitted.
 These rules previously lived in lexide's training preprocessing. Model
 vocabulary validation and recording-specific acoustic corrections remain with
 the consumer. `hʲ` is preserved: one malformed corpus record is not a reason
-to delete a phone globally. Build identity records provenance; consumers can
+to delete a phone globally. English requests containing Hangul are explicitly
+refused as `english_hangul`, preventing an implicit switch to eSpeak Korean
+for bilingual instructional records. Build identity records provenance; consumers can
 key expensive downstream results by the expected phones themselves.
 
 **0.4 introduced the espeak label inventory used by the deployed checkpoint.**
