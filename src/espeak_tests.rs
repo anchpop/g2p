@@ -181,14 +181,14 @@ fn requested_words_use_merged_inventory() {
 }
 
 #[test]
-fn source_artifacts_are_fixed_without_global_digit_or_caret_stripping() {
+fn source_artifacts_are_fixed_and_digits_are_preserved() {
     let fa = phonemize("قهوه", "fa").unwrap();
     assert_eq!(fa.raw, "qˈahveː");
     assert_eq!(fa.phonemes, ["q", "a", "h", "v", "eː"]);
     let ru = phonemize("царь", "ru").unwrap();
     assert_eq!(ru.raw, "tsˈɑrɪ");
     assert_eq!(ru.phonemes, ["ts", "ɑ", "r", "ɪ"]);
-    assert_eq!(g2p::parse::parse("q1 ɪ^").phonemes, ["q", "1", "ɪ", "^"]);
+    assert_eq!(g2p::parse::parse("q1 ɪ^").phonemes, ["q", "1", "ɪ"]);
 }
 
 #[test]

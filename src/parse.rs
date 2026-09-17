@@ -98,7 +98,30 @@ pub fn parse(raw: &str) -> Parsed {
 pub(crate) const PHONE_SEPARATOR: char = '\u{1f}';
 
 pub(crate) fn parse_framed(raw: &str, language: &str) -> Parsed {
-    parse_impl(raw, Some(language))
+    let mut parsed = parse_impl(raw, Some(language));
+    // Use the requested language even for eSpeak's code-switched loanwords.
+    // These replacements are one-to-one, preserving every aligned field.
+    for phone in &mut parsed.phonemes {
+        let replacement = match (
+            language.split('-').next().unwrap_or(language),
+            phone.as_str(),
+        ) {
+            ("en", "ɐ" | "ᵻ") => "ə",
+            ("fr", "uː" | "ʊ") => "u",
+            ("fr", "ɔː" | "ɒ") => "ɔ",
+            ("fr", "ɑː" | "aː" | "ʌ" | "ɐ") => "a",
+            ("fr", "oː") => "o",
+            ("fr", "iː" | "ɪ") => "i",
+            ("fr", "yː") => "y",
+            ("fr", "eː") => "e",
+            ("fr", "ɜː") => "œ",
+            ("it", "ɪ") => "i",
+            ("it", "ʊ") => "u",
+            _ => continue,
+        };
+        *phone = replacement.to_owned();
+    }
+    parsed
 }
 
 #[derive(Clone)]
@@ -127,7 +150,8 @@ fn parse_impl(raw: &str, language: Option<&str>) -> Parsed {
 
     let mut i = 0;
     while i < chars.len() {
-        let ch = chars[i];
+        // Some Danish output spells IPA open-e with Greek epsilon.
+        let ch = if chars[i] == 'ε' { 'ɛ' } else { chars[i] };
         if ch == '('
             && let Some(len) = marker_len(&chars[i..])
         {
@@ -151,6 +175,18 @@ fn parse_impl(raw: &str, language: Option<&str>) -> Parsed {
         if framed && ch == PHONE_SEPARATOR {
             origin.phone += 1;
             // Do not reset stress: adjacent vowels historically share it.
+            continue;
+        }
+        if "\"().?^".contains(ch) {
+            // Punctuation/syllable separators are not phones. Discard attached
+            // modifiers too: `.ː` must not lengthen the preceding vowel.
+            while i < chars.len()
+                && (CONTINUATIONS.contains(chars[i]) || chars[i] == PHONE_SEPARATOR)
+            {
+                i += 1;
+            }
+            origin.barrier += 1;
+            in_vowel = false;
             continue;
         }
         let before = p.phonemes.len();
@@ -324,6 +360,23 @@ mod tests {
     }
 
     #[test]
+    fn pronunciation_is_ready_for_consumers() {
+        let p = parse_framed("ˈɐ .ː ˌᵻ ɪ ɐ̯ hʲ", "en-us");
+        assert_eq!(p.phonemes, ["ə", "ə", "ɪ", "ɐ̯", "hʲ"]);
+        assert_eq!(p.stress[..2], [Stress::Primary, Stress::Secondary]);
+        assert_eq!(p.word_spans, [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]);
+        assert_eq!(
+            parse_framed("(en)uː ɔː ɑː oː aː iː yː eː ɜː ɪ ʊ ʌ ɒ ɐ", "fr-fr").phonemes,
+            [
+                "u", "ɔ", "a", "o", "a", "i", "y", "e", "œ", "i", "u", "a", "ɔ", "a"
+            ]
+        );
+        assert_eq!(parse_framed("(en)ɪ ʊ ɪː", "it").phonemes, ["i", "u", "ɪː"]);
+        assert_eq!(parse_framed("ˈε", "da").stress, [Stress::Primary]);
+        assert_eq!(parse_framed("a.ːi", "en-us").phonemes, ["a", "i"]);
+    }
+
+    #[test]
     fn palatalization_folds_onto_consonants_only() {
         assert_eq!(
             phonemes("tʲinʲ ɫʲ iʲo"),
@@ -427,7 +480,7 @@ mod framed_tests {
                 assert_eq!(p.stress, [Stress::Primary]);
                 assert_eq!(p.word_spans, [(0, 1)]);
                 // Identical spelling in another language is not sufficient.
-                assert_eq!(framed(unit, "fr-fr").phonemes, legacy);
+                assert_eq!(framed(unit, "pl").phonemes, legacy);
                 for boundary in WORD_BOUNDARIES.chars() {
                     let p = framed(&legacy.join(&boundary.to_string()), language);
                     assert_eq!(p.phonemes, legacy, "{language}: {unit} {boundary:?}");
@@ -535,7 +588,7 @@ mod framed_tests {
     #[test]
     fn language_switches_change_only_merge_policy() {
         let p = framed("aɪ;(en)ˈaɪ;(fr)aɪ", "fr-fr");
-        assert_eq!(p.phonemes, ["a", "ɪ", "aɪ", "a", "ɪ"]);
+        assert_eq!(p.phonemes, ["a", "i", "aɪ", "a", "i"]);
         assert_eq!(
             p.stress,
             [

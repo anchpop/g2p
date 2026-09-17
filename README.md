@@ -22,8 +22,19 @@ no `ESPEAK_NG_DATA_PATH`, no way to run against mainline espeak by mistake.
   markers stripped, and the units below merged. See `src/parse.rs`.
 
 **Raw-voice and Hindi-version API knobs are removed.** Hindi retains the
-trained Current labels as its default; all existing default labels and the
-0.4.0 identity are unchanged.
+trained Current labels as its default.
+
+**0.5 makes g2p the owner of pronunciation normalization.** Consumers use the
+returned phones directly. English exact `ɐ`/`ᵻ` become `ə`; French loanword
+vowels use the French inventory (including removal of listed vowel lengths);
+Italian exact `ɪ`/`ʊ` become `i`/`u`, including code-switched words. Modified
+variants remain distinct. Greek `ε` is corrected to IPA `ɛ`, and leaked
+punctuation/syllable separators and their attached modifiers are omitted.
+These rules previously lived in lexide's training preprocessing. Model
+vocabulary validation and recording-specific acoustic corrections remain with
+the consumer. `hʲ` is preserved: one malformed corpus record is not a reason
+to delete a phone globally. Build identity records provenance; consumers can
+key expensive downstream results by the expected phones themselves.
 
 **0.4 introduced the espeak label inventory used by the deployed checkpoint.**
 Keep models pinned to the g2p revision used to train them; changing inventories
@@ -62,8 +73,9 @@ public `raw`. Plain `parse::parse(raw)` retains legacy character segmentation:
 raw IPA cannot distinguish an affricate from two neighboring phones. Use
 `phonemize_language`/`phonemize_lang` for current labels.
 
-Stress, tone and length handling are unchanged (adjacent vowels still share
-stress, even across engine-phone separators). The Japanese, Mandarin, Korean
+Stress and tone handling are unchanged (adjacent vowels still share
+stress, even across engine-phone separators). Length is preserved except for
+the French vowel replacements described above. The Japanese, Mandarin, Korean
 and Thai backend chains are unchanged. Hindi selection is described below;
 neither private Hindi algorithm is changed. Source fixes remove the Persian
 q1 artifact (قهوه `q1ˈahveː` → `qˈahveː`) and Russian mnemonic `^` (царь
@@ -210,7 +222,7 @@ checkpoint's training sidecar (`phoneme_backend_g2p-hin.jsonl`) emits `ज्ञ
 
 This retains the former Current default, including refusal of digits and Latin
 script rather than leaving holes where audio contains speech. Removing the
-selector does not change default labels or the 0.4.0 identity. Consumers that
+selector did not change Hindi default labels. Consumers that
 explicitly selected the historical Legacy inventory must use the trained
 Current labels instead; downstream scoring/training deployment is coordinated
 by their owners rather than exposing an alternate inventory here.
