@@ -181,14 +181,14 @@ fn requested_words_use_merged_inventory() {
 }
 
 #[test]
-fn source_artifacts_are_fixed_without_global_digit_or_caret_stripping() {
+fn source_artifacts_are_fixed_and_digits_are_preserved() {
     let fa = phonemize("قهوه", "fa").unwrap();
     assert_eq!(fa.raw, "qˈahveː");
     assert_eq!(fa.phonemes, ["q", "a", "h", "v", "eː"]);
     let ru = phonemize("царь", "ru").unwrap();
     assert_eq!(ru.raw, "tsˈɑrɪ");
     assert_eq!(ru.phonemes, ["ts", "ɑ", "r", "ɪ"]);
-    assert_eq!(g2p::parse::parse("q1 ɪ^").phonemes, ["q", "1", "ɪ", "^"]);
+    assert_eq!(g2p::parse::parse("q1 ɪ^").phonemes, ["q", "1", "ɪ"]);
 }
 
 #[test]
@@ -299,4 +299,20 @@ fn every_mapping_is_reachable_and_defaults_preserve_engine_output() {
             assert_eq!(actual, phonemize("", voice).unwrap(), "{lang}");
         }
     }
+}
+
+#[test]
+fn english_refuses_hangul_instead_of_switching_to_korean() {
+    for text in [
+        "아니요, 그렇지만 그것은 충분해요. Listen and repeat.",
+        "Hello ᄀ",
+        "Hello ㄱ",
+        "Hello ꥠ",
+        "Hello ힰ",
+        "Hello ﾡ",
+    ] {
+        assert!(matches!(g2p::phonemize_lang("eng", text),
+            Err(g2p::Error::Unlabelable(reason)) if reason.starts_with("english_hangul:")));
+    }
+    assert!(g2p::phonemize_lang("eng", "Listen and repeat.").is_ok());
 }
