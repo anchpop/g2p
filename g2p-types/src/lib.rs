@@ -145,8 +145,9 @@ mod tests {
                 .iter()
                 .map(|p| p.as_str())
                 .collect::<Vec<_>>(),
-            ["t͡ʃ", "oʊ", "ts", "ãː"]
+            ["t͡ʃ", "oʊ", "ts", "ãː"]
         );
+        assert_eq!(target.raw, " | t͡ʃ oʊ | ts ãː || ");
         assert_eq!(target.word_spans, [(0, 2), (2, 4)]);
         assert!(target.stress.is_empty() && target.tone.is_empty() && target.pitch.is_empty());
         assert!(

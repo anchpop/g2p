@@ -23,7 +23,8 @@ no `ESPEAK_NG_DATA_PATH`, no way to run against mainline espeak by mistake.
 
 `phonemes` contains the shared `g2p_types::Phoneme` enum, not arbitrary strings.
 `Phoneme::as_str()`/`Display` give its exact IPA spelling; serde stores those same
-strings. Parsing is fallible: CTC controls, unsupported labels and notation
+strings. Tokens are matched after NFC normalization, and the inventory is stored
+in NFC. Parsing is fallible: CTC controls, unsupported labels and notation
 fragments never become phonemes. Checkpoint IDs do not define enum values.
 The inventory includes supported G2P tokens, acoustic-training contrasts and
 observed WikiPron segmental tokens. A known phone may still be absent from a

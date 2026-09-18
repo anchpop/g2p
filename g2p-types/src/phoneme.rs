@@ -1,8 +1,9 @@
-//! Shared segmental inventory. Spellings are exact token identities, not
+//! Shared segmental inventory. NFC spellings are token identities, not
 //! checkpoint IDs. CTC controls and unsupported legacy labels are not phonemes.
 //! Add a variant here when a supported engine or acoustic contrast needs it.
 
 use std::{borrow::Borrow, fmt, str::FromStr};
+use unicode_normalization::UnicodeNormalization;
 
 macro_rules! phonemes {
     ($($name:ident => $ipa:literal,)+) => {
@@ -15,7 +16,8 @@ macro_rules! phonemes {
         impl FromStr for Phoneme {
             type Err = UnknownPhoneme;
             fn from_str(token: &str) -> Result<Self, Self::Err> {
-                match token { $($ipa => Ok(Self::$name),)+ _ => Err(UnknownPhoneme(token.to_owned())) }
+                let normalized = token.nfc().collect::<String>();
+                match normalized.as_str() { $($ipa => Ok(Self::$name),)+ _ => Err(UnknownPhoneme(token.to_owned())) }
             }
         }
     };
@@ -39,8 +41,6 @@ phonemes! {
     ALongSmallR => "aːʳ",
     ALongNasal => "aː̃",
     AHalfLong => "aˑ",
-    ANasal => "ã",
-    ANasalLong => "ãː",
     AMinusSignBelow => "a̠",
     AMinusSignBelowLong => "a̠ː",
     ANonSyllabic => "a̯",
@@ -102,8 +102,6 @@ phonemes! {
     EUpsilon => "eʊ",
     ELong => "eː",
     ELongNasal => "eː̃",
-    ENasal => "ẽ",
-    ENasalLong => "ẽː",
     ELowered => "e̞",
     ELoweredELowered => "e̞e̞",
     ELoweredLong => "e̞ː",
@@ -129,7 +127,6 @@ phonemes! {
     ILong => "iː",
     ILongLong => "iːː",
     ILongNasal => "iː̃",
-    INasal => "ĩ",
     IVoiceless => "i̥",
     IDentalReversedOpenE => "i̪ɜ",
     INonSyllabic => "i̯",
@@ -190,8 +187,7 @@ phonemes! {
     OLongTurnedR => "oːɹ",
     OLongSmallR => "oːʳ",
     OLongNasal => "oː̃",
-    ONasal => "õ",
-    ONasalSmallCapitalINasal => "õɪ̃",
+    ONasalSmallCapitalINasal => "õɪ̃",
     ORaised => "o̝",
     OLowered => "o̞",
     OLoweredOLowered => "o̞o̞",
@@ -288,8 +284,7 @@ phonemes! {
     USmallCapitalI => "uɪ",
     ULong => "uː",
     ULongNasal => "uː̃",
-    UNasal => "ũ",
-    UNasalSmallCapitalINasal => "ũɪ̃",
+    UNasalSmallCapitalINasal => "ũɪ̃",
     UNonSyllabic => "u̯",
     V => "v",
     VPalatalized => "vʲ",
@@ -309,7 +304,6 @@ phonemes! {
     YReversedOpenE => "yɜ",
     YLong => "yː",
     YLongNasal => "yː̃",
-    YNasal => "ỹ",
     YNonSyllabic => "y̯",
     Z => "z",
     ZPalatalized => "zʲ",
@@ -659,6 +653,19 @@ impl Borrow<str> for Phoneme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inventory_is_nfc_unique_and_accepts_nfd() {
+        let mut spellings = std::collections::HashSet::new();
+        for &phone in Phoneme::ALL {
+            let spelling = phone.as_str();
+            assert!(unicode_normalization::is_nfc(spelling), "{phone:?}");
+            assert!(spellings.insert(spelling), "duplicate spelling: {phone:?}");
+            let decomposed = spelling.nfd().collect::<String>();
+            assert_eq!(decomposed.parse::<Phoneme>().unwrap(), phone);
+        }
+    }
+
     #[test]
     fn inventory_round_trips_and_rejects_nonphones() {
         for &phone in Phoneme::ALL {
