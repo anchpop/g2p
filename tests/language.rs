@@ -15,7 +15,7 @@ fn spanish_varieties_distinguish_seseo() {
         (Language::SpanishLatinAmerica, "s"),
     ] {
         let result = phonemize(language, "cinco").unwrap();
-        assert_eq!(result.phonemes.first().unwrap(), initial);
+        assert_eq!(result.phonemes.first().unwrap().as_str(), initial);
     }
 }
 
@@ -44,10 +44,21 @@ fn assert_backend_identity(lang: &str, text: &str) {
 fn hindi_default_remains_the_trained_current_output() {
     assert_backend_identity("hin", "यह शहर");
     let result = phonemize_lang("hin", "यह शहर").unwrap();
-    assert_eq!(result.phonemes, ["j", "eː", "ʃ", "ɛː", "ɦ", "ɛː", "ɾ"]);
+    assert_eq!(
+        result
+            .phonemes
+            .iter()
+            .map(|p| p.as_str())
+            .collect::<Vec<_>>(),
+        ["j", "eː", "ʃ", "ɛː", "ɦ", "ɛː", "ɾ"]
+    );
     let words = g2p::hindi::phonemize("यह शहर").unwrap();
     assert_eq!(
-        result.phonemes,
+        result
+            .phonemes
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
         words
             .into_iter()
             .flat_map(|w| w.phonemes)

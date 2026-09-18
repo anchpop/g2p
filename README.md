@@ -21,6 +21,23 @@ no `ESPEAK_NG_DATA_PATH`, no way to run against mainline espeak by mistake.
   the previous token, `ʲ` folded onto a preceding consonant, language-switch
   markers stripped, and the units below merged. See `src/parse.rs`.
 
+`phonemes` contains the shared `g2p_types::Phoneme` enum, not arbitrary strings.
+`Phoneme::as_str()`/`Display` give its exact IPA spelling; serde stores those same
+strings. Tokens are matched after NFC normalization, and the inventory is stored
+in NFC. Parsing is fallible: CTC controls, unsupported labels and notation
+fragments never become phonemes. Checkpoint IDs do not define enum values.
+The inventory includes supported G2P tokens, acoustic-training contrasts and
+observed WikiPron segmental tokens. A known phone may still be absent from a
+particular model vocabulary; lexide reports that separately.
+
+For tokenized dictionary IPA, use
+`Phonemized::from_ipa_tokens("ˈt͡ʃ oʊ | ts a")?`. Optional `|` separates words.
+Stress and syllable/liaison notation remain in `raw`; unavailable prosodic
+annotations stay empty. Segment boundaries are preserved, and an unknown token
+returns `UnknownPhoneme`. This does not guess segmentation of continuous IPA.
+Use `Phonemized::from_words` for already-typed words. Both constructors live in
+`g2p-types`, so consumers need no native engine.
+
 **Raw-voice and Hindi-version API knobs are removed.** Hindi uses the
 pronunciation rules described below.
 
@@ -75,8 +92,10 @@ public `raw`. Plain `parse::parse(raw)` retains legacy character segmentation:
 raw IPA cannot distinguish an affricate from two neighboring phones. Use
 `phonemize`/`phonemize_lang` for current labels.
 
-Stress and tone handling are unchanged (adjacent vowels still share
-stress, even across engine-phone separators). Length is preserved except for
+Adjacent vowels still share stress, even across engine-phone separators.
+Cantonese and Vietnamese tone numbers are carried in `tone` on the engine’s
+tone-bearing phone, rather than in `phonemes`; `raw` keeps the original trace.
+Tone codes retain eSpeak’s numbering (1–7), including its contextual tone 7. Length is preserved except for
 the French vowel replacements described above. The Japanese, Mandarin, Korean
 and Thai backend chains are unchanged. Hindi selection is described below;
 neither private Hindi algorithm is changed. Source fixes remove the Persian

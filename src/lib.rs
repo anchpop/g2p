@@ -45,7 +45,7 @@ pub mod mandarin;
 pub mod parse;
 pub mod thai;
 
-pub use g2p_types::{LabelSource, Language, Phonemized, Pitch};
+pub use g2p_types::{LabelSource, Language, Phoneme, Phonemized, Pitch, UnknownPhoneme};
 pub use hindi::Syllable;
 
 pub use parse::{Parsed, Stress};
@@ -83,6 +83,8 @@ pub fn identity() -> String {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    UnknownPhoneme(#[from] UnknownPhoneme),
     #[error("espeak-ng failed to initialize: {0}")]
     Init(String),
     #[error("could not unpack embedded espeak-ng data: {0}")]
@@ -118,21 +120,41 @@ pub enum Error {
 /// Thread-safe (espeak-ng has global state; calls serialize on a lock).
 fn phonemize_espeak(text: &str, voice: &str) -> Result<Phonemized, Error> {
     let (raw, framed, language) = phonemize_espeak_traces(text, voice)?;
-    let Parsed {
-        phonemes,
-        stress,
-        word_spans,
-    } = parse::parse_framed(&framed, &language);
-    Ok(Phonemized {
+    let parsed = parse::parse_framed(&framed, &language);
+    espeak_phonemized(raw, parsed, matches!(language.as_str(), "yue" | "vi"))
+}
+
+fn espeak_phonemized(raw: String, parsed: Parsed, has_tones: bool) -> Result<Phonemized, Error> {
+    let mut out = Phonemized {
         raw,
-        phonemes,
-        stress,
-        word_spans,
-        syllables: Vec::new(),
-        tone: Vec::new(),
-        pitch: Vec::new(),
-        accent_withheld: None,
-    })
+        ..Phonemized::default()
+    };
+    for (start, end) in parsed.word_spans {
+        let word_start = out.phonemes.len();
+        for i in start..end {
+            let phone = &parsed.phonemes[i];
+            if has_tones && matches!(phone.as_str(), "1" | "2" | "3" | "4" | "5" | "6" | "7") {
+                // eSpeak's WritePhMnemonic appends tone_ph directly to its
+                // bearing phone, before any coda. Keep that exact alignment.
+                if out.phonemes.len() == word_start || out.tone.last().unwrap().is_some() {
+                    return Err(Error::Unlabelable(format!(
+                        "espeak_unattached_tone:{phone}"
+                    )));
+                }
+                *out.tone.last_mut().unwrap() = Some(phone.as_bytes()[0] - b'0');
+            } else {
+                out.phonemes.push(phone.parse()?);
+                out.stress.push(parsed.stress[i]);
+                if has_tones {
+                    out.tone.push(None);
+                }
+            }
+        }
+        if out.phonemes.len() > word_start {
+            out.word_spans.push((word_start, out.phonemes.len()));
+        }
+    }
+    Ok(out)
 }
 
 /// Just espeak's IPA string for `text` (clauses joined with single spaces).
@@ -213,14 +235,14 @@ pub fn phonemize(language: Language, text: &str) -> Result<Phonemized, Error> {
 
     match source {
         LabelSource::Espeak => phonemize_espeak(text, engine_voice(language)),
-        LabelSource::Hindi => Ok(hindi_phonemized(hindi::phonemize(text)?)),
-        LabelSource::Mandarin => Ok(mandarin_phonemized(mandarin::phonemize(text)?)),
+        LabelSource::Hindi => hindi_phonemized(hindi::phonemize(text)?),
+        LabelSource::Mandarin => mandarin_phonemized(mandarin::phonemize(text)?),
         #[cfg(feature = "japanese")]
-        LabelSource::Japanese => Ok(japanese_phonemized(japanese::phonemize(text)?)),
+        LabelSource::Japanese => japanese_phonemized(japanese::phonemize(text)?),
         #[cfg(not(feature = "japanese"))]
         LabelSource::Japanese => Err(Error::UnsupportedLanguage(lang.to_string())),
-        LabelSource::Thai => Ok(thai_phonemized(thai::phonemize(text)?)),
-        LabelSource::Korean => Ok(korean_phonemized(korean::phonemize(text)?)),
+        LabelSource::Thai => thai_phonemized(thai::phonemize(text)?),
+        LabelSource::Korean => korean_phonemized(korean::phonemize(text)?),
     }
 }
 
@@ -234,48 +256,60 @@ fn engine_voice(language: Language) -> &'static str {
 
 /// Korean labels in the common shape: no stress, no tone, the post-sandhi
 /// Hangul as `raw`.
-fn korean_phonemized(labels: korean::Labels) -> Phonemized {
-    Phonemized {
+fn korean_phonemized(labels: korean::Labels) -> Result<Phonemized, Error> {
+    Ok(Phonemized {
         raw: labels.raw,
-        phonemes: labels.phonemes,
+        phonemes: labels
+            .phonemes
+            .iter()
+            .map(|p| p.parse())
+            .collect::<Result<_, _>>()?,
         stress: labels.stress,
         word_spans: labels.word_spans,
         ..Phonemized::default()
-    }
+    })
 }
 
 /// Thai labels in the common shape.
-fn thai_phonemized(labels: thai::Labels) -> Phonemized {
-    Phonemized {
+fn thai_phonemized(labels: thai::Labels) -> Result<Phonemized, Error> {
+    Ok(Phonemized {
         raw: labels.raw,
-        phonemes: labels.phonemes,
+        phonemes: labels
+            .phonemes
+            .iter()
+            .map(|p| p.parse())
+            .collect::<Result<_, _>>()?,
         stress: labels.stress,
         word_spans: labels.word_spans,
         tone: labels.tone,
         ..Phonemized::default()
-    }
+    })
 }
 
 /// Japanese labels in the common shape: one word span for the utterance
 /// (OpenJTalk's word boundaries are not part of the label), no stress, the
 /// pitch factor, and OpenJTalk's phone string as `raw`.
 #[cfg(feature = "japanese")]
-fn japanese_phonemized(labels: japanese::Labels) -> Phonemized {
+fn japanese_phonemized(labels: japanese::Labels) -> Result<Phonemized, Error> {
     let n = labels.phonemes.len();
-    Phonemized {
+    Ok(Phonemized {
         raw: labels.native_phones.join(" "),
         stress: vec![Stress::None; n],
         word_spans: if n == 0 { Vec::new() } else { vec![(0, n)] },
-        phonemes: labels.phonemes,
+        phonemes: labels
+            .phonemes
+            .iter()
+            .map(|p| p.parse())
+            .collect::<Result<_, _>>()?,
         pitch: labels.pitch,
         accent_withheld: labels.accent_withheld,
         ..Phonemized::default()
-    }
+    })
 }
 
 /// Flatten per-syllable Mandarin labels into the common shape: one word span
 /// per syllable, no stress, tone on the bearing phone, and pinyin as `raw`.
-fn mandarin_phonemized(syllables: Vec<mandarin::Syllable>) -> Phonemized {
+fn mandarin_phonemized(syllables: Vec<mandarin::Syllable>) -> Result<Phonemized, Error> {
     let mut out = Phonemized::default();
     let mut pinyin = Vec::with_capacity(syllables.len());
     for s in syllables {
@@ -283,16 +317,21 @@ fn mandarin_phonemized(syllables: Vec<mandarin::Syllable>) -> Phonemized {
         out.stress
             .extend(std::iter::repeat_n(Stress::None, s.phonemes.len()));
         out.tone.extend(s.tone);
-        out.phonemes.extend(s.phonemes);
+        out.phonemes.extend(
+            s.phonemes
+                .iter()
+                .map(|p| p.parse())
+                .collect::<Result<Vec<Phoneme>, _>>()?,
+        );
         out.word_spans.push((start, out.phonemes.len()));
         pinyin.push(s.pinyin);
     }
     out.raw = pinyin.join(" ");
-    out
+    Ok(out)
 }
 
 /// Flatten per-word Hindi labels into the common shape.
-fn hindi_phonemized(words: Vec<hindi::Word>) -> Phonemized {
+fn hindi_phonemized(words: Vec<hindi::Word>) -> Result<Phonemized, Error> {
     let mut out = Phonemized::default();
     let mut raw_words = Vec::with_capacity(words.len());
     for w in words {
@@ -305,12 +344,17 @@ fn hindi_phonemized(words: Vec<hindi::Word>) -> Phonemized {
                 ..s
             }));
         raw_words.push(w.phonemes.concat());
-        out.phonemes.extend(w.phonemes);
+        out.phonemes.extend(
+            w.phonemes
+                .iter()
+                .map(|p| p.parse())
+                .collect::<Result<Vec<Phoneme>, _>>()?,
+        );
         out.stress.extend(w.stress);
         out.word_spans.push((start, out.phonemes.len()));
     }
     out.raw = raw_words.join(" ");
-    out
+    Ok(out)
 }
 
 struct Engine {

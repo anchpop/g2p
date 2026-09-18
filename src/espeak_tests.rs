@@ -5,7 +5,12 @@ use crate as g2p;
 use g2p::{Stress, phonemize_espeak};
 
 fn bare(text: &str, voice: &str) -> Vec<String> {
-    phonemize_espeak(text, voice).unwrap().phonemes
+    phonemize_espeak(text, voice)
+        .unwrap()
+        .phonemes
+        .iter()
+        .map(ToString::to_string)
+        .collect()
 }
 
 #[test]
@@ -80,7 +85,12 @@ fn language_switch_markers_do_not_leak_letters() {
     // A loanword makes espeak switch voices mid-sentence and bracket it as
     // "(en)…(fr)"; neither the parentheses nor the codes may become tokens.
     let r = phonemize_espeak("le football", "fr-fr").unwrap();
-    assert!(!r.phonemes.iter().any(|p| p == "(" || p == ")"), "{r:?}");
+    assert!(
+        !r.phonemes
+            .iter()
+            .any(|p| p.as_str() == "(" || p.as_str() == ")"),
+        "{r:?}"
+    );
 }
 
 #[test]
@@ -94,8 +104,10 @@ fn russian_palatalization_is_one_token() {
 fn mandarin_has_tones() {
     // Tone marks come from the pitch pass the CLI runs; the shortcut
     // `espeak_TextToPhonemes` API would miss tone sandhi.
-    let r = phonemize_espeak("你好", "cmn").unwrap();
-    assert!(!r.phonemes.is_empty(), "{r:?}");
+    // This unsupported raw eSpeak route emits inline tone digits. Production
+    // Mandarin uses the dedicated backend and a separate tone field.
+    let raw = g2p::phonemize_espeak_raw("你好", "cmn").unwrap();
+    assert!(raw.chars().any(|c| c.is_ascii_digit()), "{raw:?}");
 }
 
 #[test]
@@ -144,8 +156,8 @@ fn requested_words_use_merged_inventory() {
         ("de", "Eis", "aɪ"),
         ("pt-br", "pão", "ɐ̃ʊ̃"),
         ("pt-br", "mãe", "ɐ̃j"),
-        ("pt-br", "põe", "õɪ̃"),
-        ("pt-br", "muito", "ũɪ̃"),
+        ("pt-br", "põe", "õɪ̃"),
+        ("pt-br", "muito", "ũɪ̃"),
         ("pt-br", "mau", "aʊ"),
         ("pt-br", "sei", "eɪ"),
         ("pt-br", "sou", "oʊ"),
@@ -170,7 +182,7 @@ fn requested_words_use_merged_inventory() {
     ] {
         let p = phonemize_espeak(text, voice).unwrap();
         assert!(
-            p.phonemes.iter().any(|p| p == unit),
+            p.phonemes.iter().any(|p| p.as_str() == unit),
             "{voice} {text}: {p:?}, expected {unit}"
         );
         assert_eq!(p.phonemes.len(), p.stress.len());
@@ -184,22 +196,28 @@ fn requested_words_use_merged_inventory() {
 fn source_artifacts_are_fixed_and_digits_are_preserved() {
     let fa = phonemize_espeak("قهوه", "fa").unwrap();
     assert_eq!(fa.raw, "qˈahveː");
-    assert_eq!(fa.phonemes, ["q", "a", "h", "v", "eː"]);
+    assert_eq!(
+        fa.phonemes.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
+        ["q", "a", "h", "v", "eː"]
+    );
     let ru = phonemize_espeak("царь", "ru").unwrap();
     assert_eq!(ru.raw, "tsˈɑrɪ");
-    assert_eq!(ru.phonemes, ["ts", "ɑ", "r", "ɪ"]);
+    assert_eq!(
+        ru.phonemes.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
+        ["ts", "ɑ", "r", "ɪ"]
+    );
     assert_eq!(g2p::parse::parse("q1 ɪ^").phonemes, ["q", "1", "ɪ"]);
 }
 
 #[test]
 fn actual_phone_and_word_boundaries_protect_clusters_and_onsets() {
     let p = phonemize_espeak("cat ship", "en-us").unwrap();
-    assert!(!p.phonemes.iter().any(|p| p == "tʃ"), "{p:?}");
+    assert!(!p.phonemes.iter().any(|p| p.as_str() == "tʃ"), "{p:?}");
     let p = phonemize_espeak("cats", "en-us").unwrap();
-    assert!(!p.phonemes.iter().any(|p| p == "ts"), "{p:?}");
+    assert!(!p.phonemes.iter().any(|p| p.as_str() == "ts"), "{p:?}");
     for word in ["mirror", "hero"] {
         let p = phonemize_espeak(word, "en-us").unwrap();
-        assert!(!p.phonemes.iter().any(|p| p == "ɪɹ"), "{p:?}");
+        assert!(!p.phonemes.iter().any(|p| p.as_str() == "ɪɹ"), "{p:?}");
     }
     let p = phonemize_espeak("day my. Boy now!", "en-us").unwrap();
     assert_eq!(p.word_spans.len(), 4, "{p:?}");
@@ -246,7 +264,11 @@ fn explicit_ipa_ties_remain_inside_affricate_tokens() {
         ("ps", "چای", vec!["t͡ʃ", "aː", "iː"]),
     ] {
         let p = phonemize_espeak(text, voice).unwrap();
-        assert_eq!(p.phonemes, expected, "{voice} {text}: {p:?}");
+        assert_eq!(
+            p.phonemes.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
+            expected,
+            "{voice} {text}: {p:?}"
+        );
         assert_eq!(p.stress.len(), p.phonemes.len());
         assert_eq!(p.word_spans.last().unwrap().1, p.phonemes.len());
         assert!(p.raw.contains('͡'));
@@ -304,4 +326,37 @@ fn english_refuses_hangul_instead_of_switching_to_korean() {
             Err(g2p::Error::Unlabelable(reason)) if reason.starts_with("english_hangul:")));
     }
     assert!(g2p::phonemize_lang("eng", "Listen and repeat.").is_ok());
+}
+
+#[test]
+fn cantonese_and_vietnamese_tones_are_aligned_metadata() {
+    for (language, text, phones, tones) in [
+        (
+            g2p::Language::Cantonese,
+            "你好",
+            vec!["n", "e", "i", "h", "o", "u"],
+            vec![None, None, Some(5), None, None, Some(2)],
+        ),
+        (
+            g2p::Language::Vietnamese,
+            "Xin chào",
+            vec!["s", "i", "n", "tʃ", "aː", "w"],
+            vec![None, Some(1), None, None, Some(2), None],
+        ),
+    ] {
+        let result = g2p::phonemize(language, text).unwrap();
+        assert_eq!(
+            result
+                .phonemes
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>(),
+            phones
+        );
+        assert_eq!(result.tone, tones);
+        assert_eq!(result.stress.len(), result.phonemes.len());
+        assert_eq!(result.word_spans, [(0, 3), (3, 6)]);
+        assert!(result.raw.chars().any(|c| c.is_ascii_digit()));
+        assert!(g2p::phonemize(language, "...").unwrap().tone.is_empty());
+    }
 }

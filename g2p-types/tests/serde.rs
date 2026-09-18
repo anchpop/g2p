@@ -67,7 +67,7 @@ fn all_shared_labels_roundtrip_without_engines() {
     };
     roundtrip(Phonemized {
         raw: "a".into(),
-        phonemes: vec!["a".into()],
+        phonemes: vec!["a".parse().unwrap()],
         stress: vec![Stress::Primary],
         word_spans: vec![(0, 1)],
         syllables: vec![syllable.clone()],
@@ -76,12 +76,12 @@ fn all_shared_labels_roundtrip_without_engines() {
         accent_withheld: Some("diagnostic".into()),
     });
     roundtrip(Parsed {
-        phonemes: vec!["a".into()],
+        phonemes: vec!["a".parse().unwrap()],
         stress: vec![Stress::Primary],
         word_spans: vec![(0, 1)],
     });
     roundtrip(g2p_types::hindi::Word {
-        phonemes: vec!["a".into()],
+        phonemes: vec!["a".parse().unwrap()],
         stress: vec![Stress::Primary],
         syllables: vec![syllable],
         schwa_retained: vec![true, false],
@@ -93,14 +93,14 @@ fn all_shared_labels_roundtrip_without_engines() {
         tone: vec![None, Some(3)],
     });
     roundtrip(g2p_types::japanese::Labels {
-        phonemes: vec!["a".into()],
+        phonemes: vec!["a".parse().unwrap()],
         pitch: vec![Some(pitch)],
         accent_withheld: None,
         native_phones: vec!["a".into()],
     });
     roundtrip(g2p_types::thai::Labels {
         raw: "a".into(),
-        phonemes: vec!["a".into()],
+        phonemes: vec!["a".parse().unwrap()],
         stress: vec![Stress::Primary],
         tone: vec![Some(1)],
         word_spans: vec![(0, 1)],
