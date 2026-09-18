@@ -21,6 +21,13 @@ no `ESPEAK_NG_DATA_PATH`, no way to run against mainline espeak by mistake.
   the previous token, `ʲ` folded onto a preceding consonant, language-switch
   markers stripped, and the units below merged. See `src/parse.rs`.
 
+For a dictionary that already supplies whitespace-separated IPA tokens, use
+`Phonemized::from_ipa_tokens("ˈt͡ʃ oʊ | ts a")`. Optional `|` separators mark
+words; otherwise the sequence is one word. This preserves tokens exactly and
+leaves unknown prosodic fields empty. It does not guess segmentation of continuous
+IPA or convert arbitrary dictionary labels into a trained model's vocabulary.
+The constructor lives in `g2p-types`, so consumers need no native engine.
+
 **Raw-voice and Hindi-version API knobs are removed.** Hindi uses the
 pronunciation rules described below.
 
