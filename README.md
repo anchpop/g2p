@@ -244,33 +244,7 @@ Calls are thread-safe (serialized on a lock; espeak has global state).
 The Rust API selects pronunciation with the combined language enum. `Error::UnknownVoice` is an internal table/engine invariant
 diagnostic, not a caller-input error.
 
-## Command line
-
-```
-cargo install --git https://github.com/anchpop/g2p --locked
-g2p --lang fra "on est"      # one utterance → JSON
-g2p --lang hin "यह शहर"      # default Hindi labels
-g2p --lang spa-419 "cinco"
-g2p --lang por-PT "dia noite"
-g2p identity                 # label-compatibility identity
-g2p serve                    # JSON lines on stdin/stdout, one utterance per line
-```
-
-The CLI accepts `--lang <language> [--] <text...>`; `--` ends option parsing
-when text starts with `--`.
-
-For `serve`, send `{"text": "cinco", "lang": "spa-419"}`. `lang` deserializes
-directly to the shared `Language` enum. Ordinary languages use their ISO 639-3
-code (plus `zho-hans`); Spanish and Portuguese require an explicit region:
-`spa-ES`, `spa-419`, `por-BR`, or `por-PT`.
-
-`voice`, `variety`, unknown fields, and unsupported language values are rejected.
-There is no raw-engine voice adapter in the external API.
-
-Each line is exactly one utterance, so the clause-versus-line framing ambiguity
-of `espeak-ng --stdin` cannot occur. Responses carry `syllables` when the backend
-computes them, and a refusal comes back as
-`{"error": ..., "unlabelable": "reason:detail"}`.
+g2p is a Rust library; callers use `g2p::phonemize(Language, text)` directly.
 
 ## Building
 

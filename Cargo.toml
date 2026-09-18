@@ -12,10 +12,6 @@ publish = false
 name = "g2p"
 path = "src/lib.rs"
 
-[[bin]]
-name = "g2p"
-path = "src/bin/g2p.rs"
-
 [features]
 default = ["japanese"]
 # Japanese labels via jpreprocess + the bundled NAIST dictionary (~85 MB in
