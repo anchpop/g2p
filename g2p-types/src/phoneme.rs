@@ -26,11 +26,9 @@ macro_rules! phonemes {
 phonemes! {
     A => "a",
     AI => "ai",
-    AIReversedOpenE => "aiɜ",
     AINonSyllabic => "ai̯",
     AU => "au",
     AUNonSyllabic => "au̯",
-    AReversedOpenE => "aɜ",
     AIWithStroke => "aɨ",
     ASmallCapitalI => "aɪ",
     ASmallCapitalISchwa => "aɪə",
@@ -94,7 +92,6 @@ phonemes! {
     E => "e",
     EE => "ee",
     EI => "ei",
-    EIReversedOpenE => "eiɜ",
     EINonSyllabic => "ei̯",
     EAlpha => "eɑ",
     ESchwa => "eə",
@@ -117,18 +114,13 @@ phonemes! {
     HLong => "hː",
     I => "i",
     IE => "ie",
-    IOUReversedOpenE => "iouɜ",
-    IAlphaReversedOpenE => "iɑɜ",
     ISchwa => "iə",
-    IOpenEReversedOpenE => "iɛɜ",
-    IReversedOpenE => "iɜ",
     IUpsilon => "iʊ",
     IPalatalized => "iʲ",
     ILong => "iː",
     ILongLong => "iːː",
     ILongNasal => "iː̃",
     IVoiceless => "i̥",
-    IDentalReversedOpenE => "i̪ɜ",
     INonSyllabic => "i̯",
     J => "j",
     JA => "ja",
@@ -174,11 +166,8 @@ phonemes! {
     NSmallSchwa => "nᵊ",
     O => "o",
     OE => "oe",
-    ONScriptGReversedOpenE => "onɡɜ",
     OU => "ou",
-    OUReversedOpenE => "ouɜ",
     OUNonSyllabic => "ou̯",
-    OReversedOpenE => "oɜ",
     OSmallCapitalI => "oɪ",
     OTurnedR => "oɹ",
     OUpsilon => "oʊ",
@@ -271,15 +260,9 @@ phonemes! {
     TTieEshAspirated => "t͡ʃʰ",
     TTieEshLong => "t͡ʃː",
     U => "u",
-    UAIReversedOpenE => "uaiɜ",
-    UAReversedOpenE => "uaɜ",
-    UEIReversedOpenE => "ueiɜ",
     UI => "ui",
     UO => "uo",
-    UOReversedOpenE => "uoɜ",
     USchwa => "uə",
-    USchwaReversedOpenE => "uəɜ",
-    UReversedOpenE => "uɜ",
     UIWithStroke => "uɨ",
     USmallCapitalI => "uɪ",
     ULong => "uː",
@@ -296,12 +279,6 @@ phonemes! {
     XPalatalized => "xʲ",
     Y => "y",
     YI => "yi",
-    YIReversedOpenE => "yiɜ",
-    YUReversedOpenE => "yuɜ",
-    YAeReversedOpenE => "yæɜ",
-    YSchwaReversedOpenE => "yəɜ",
-    YOpenEReversedOpenE => "yɛɜ",
-    YReversedOpenE => "yɜ",
     YLong => "yː",
     YLongNasal => "yː̃",
     YNonSyllabic => "y̯",
@@ -364,8 +341,6 @@ phonemes! {
     TurnedANasalUpsilonNasal => "ɐ̃ʊ̃",
     TurnedANonSyllabic => "ɐ̯",
     Alpha => "ɑ",
-    AlphaUReversedOpenE => "ɑuɜ",
-    AlphaReversedOpenE => "ɑɜ",
     AlphaIWithStroke => "ɑɨ",
     AlphaTurnedR => "ɑɹ",
     AlphaLong => "ɑː",
@@ -405,8 +380,6 @@ phonemes! {
     ReversedELong => "ɘː",
     Schwa => "ə",
     SchwaL => "əl",
-    SchwaRReversedOpenE => "ərɜ",
-    SchwaReversedOpenE => "əɜ",
     SchwaIWithStroke => "əɨ",
     SchwaSmallCapitalI => "əɪ",
     SchwaUpsilon => "əʊ",
@@ -673,7 +646,15 @@ mod tests {
             let json = serde_json::to_string(&phone).unwrap();
             assert_eq!(serde_json::from_str::<Phoneme>(&json).unwrap(), phone);
         }
-        for invalid in ["<pad>", "|", "??", "d[", "a1", "made-up"] {
+        // The borrowed eSpeak tokenizer rendered Mandarin tone 3 as ɜ.
+        // These whole-syllable labels are not segmental phones; ɜ itself is.
+        assert!("ɜ".parse::<Phoneme>().is_ok());
+        assert!("ɜː".parse::<Phoneme>().is_ok());
+        for invalid in [
+            "<pad>", "|", "??", "d[", "a1", "made-up", "aiɜ", "aɜ", "eiɜ", "iouɜ", "iɑɜ", "iɛɜ",
+            "iɜ", "i̪ɜ", "onɡɜ", "ouɜ", "oɜ", "uaiɜ", "uaɜ", "ueiɜ", "uoɜ", "uəɜ", "uɜ", "yiɜ",
+            "yuɜ", "yæɜ", "yəɜ", "yɛɜ", "yɜ", "ɑuɜ", "ɑɜ", "ərɜ", "əɜ",
+        ] {
             assert!(invalid.parse::<Phoneme>().is_err());
         }
     }
