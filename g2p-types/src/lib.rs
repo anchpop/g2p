@@ -4,6 +4,8 @@ pub mod hindi;
 pub mod japanese;
 pub mod korean;
 mod language;
+mod phoneme;
+pub use phoneme::{Phoneme, UnknownPhoneme};
 pub mod mandarin;
 pub mod parse;
 pub mod thai;
@@ -33,7 +35,7 @@ pub struct Phonemized {
     /// Not for scoring; imported dictionary IPA retains its token separators.
     pub raw: String,
     /// Phoneme tokens supplied by the engine or imported from tokenized IPA.
-    pub phonemes: Vec<String>,
+    pub phonemes: Vec<Phoneme>,
     /// Parallel to `phonemes`; empty when unknown.
     pub stress: Vec<Stress>,
     /// `[start, end)` ranges into `phonemes`, one per word when known.
@@ -44,6 +46,8 @@ pub struct Phonemized {
     pub syllables: Vec<Syllable>,
     /// Lexical tone per phoneme for tone languages — Mandarin: the tone
     /// number (1–5) on each syllable's tone-bearing phone, `None` elsewhere.
+    /// Cantonese/Vietnamese preserve eSpeak tone codes (1–7), including
+    /// contextual code 7 (Cantonese high fall; Vietnamese clause-final ngang).
     /// Parallel to `phonemes`; empty for languages without tone labels.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tone: Vec<Option<u8>>,
@@ -58,26 +62,49 @@ pub struct Phonemized {
 }
 
 impl Phonemized {
-    /// Import whitespace-separated IPA tokens, with optional `|` word boundaries.
-    /// Preserves each token exactly (including affricates, diphthongs and marks).
-    /// This is a structural conversion, not validation against a model vocabulary
-    /// or a language-specific G2P transformation. Prosodic annotations are unknown.
-    /// Without `|`, the input is treated as one word. Empty words are omitted.
-    pub fn from_ipa_tokens(ipa: &str) -> Self {
-        let mut result = Self {
-            raw: ipa.to_owned(),
-            ..Self::default()
-        };
-        for word in ipa.split('|') {
+    /// Import space-separated phoneme tokens, with `|` word boundaries.
+    /// Stress marks and syllable/liaison separators are retained in `raw`,
+    /// not treated as segmental phones. Prosody remains unaligned. Every
+    /// remaining token must belong to the inventory; unknown phones are errors.
+    pub fn from_ipa_tokens(ipa: &str) -> Result<Self, UnknownPhoneme> {
+        let words = ipa
+            .split('|')
+            .map(|word| {
+                word.split_whitespace()
+                    .map(|token| {
+                        token
+                            .chars()
+                            .filter(|c| !matches!(c, 'ˈ' | 'ˌ' | '.' | '‿'))
+                            .collect::<String>()
+                    })
+                    .filter(|token| !token.is_empty())
+                    .map(|token| token.parse())
+                    .collect::<Result<Vec<Phoneme>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut result = Self::from_words(words);
+        result.raw = ipa.to_owned();
+        Ok(result)
+    }
+
+    /// Construct a target directly from typed words, without reparsing IPA.
+    /// Prosody is unknown; use the engine output when those annotations exist.
+    pub fn from_words(words: impl IntoIterator<Item = Vec<Phoneme>>) -> Self {
+        let mut result = Self::default();
+        for word in words {
             let start = result.phonemes.len();
-            result
-                .phonemes
-                .extend(word.split_whitespace().map(str::to_owned));
+            result.phonemes.extend(word);
             let end = result.phonemes.len();
             if end > start {
                 result.word_spans.push((start, end));
             }
         }
+        result.raw = result
+            .word_spans
+            .iter()
+            .map(|&(start, end)| result.phonemes[start..end].join(""))
+            .collect::<Vec<_>>()
+            .join(" ");
         result
     }
 }
@@ -111,10 +138,23 @@ mod tests {
     use super::*;
     #[test]
     fn imported_ipa_preserves_tokens_without_inventing_prosody() {
-        let target = Phonemized::from_ipa_tokens(" | ˈt͡ʃ oʊ | ts ãː || ");
-        assert_eq!(target.phonemes, ["ˈt͡ʃ", "oʊ", "ts", "ãː"]);
+        let target = Phonemized::from_ipa_tokens(" | t͡ʃ oʊ | ts ãː || ").unwrap();
+        assert_eq!(
+            target
+                .phonemes
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>(),
+            ["t͡ʃ", "oʊ", "ts", "ãː"]
+        );
         assert_eq!(target.word_spans, [(0, 2), (2, 4)]);
         assert!(target.stress.is_empty() && target.tone.is_empty() && target.pitch.is_empty());
-        assert!(Phonemized::from_ipa_tokens(" | ").phonemes.is_empty());
+        assert!(
+            Phonemized::from_ipa_tokens(" | ")
+                .unwrap()
+                .phonemes
+                .is_empty()
+        );
+        assert!(Phonemized::from_ipa_tokens("unknown").is_err());
     }
 }
