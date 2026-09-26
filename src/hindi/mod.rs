@@ -37,6 +37,8 @@ type Unit = &'static str;
 const VIRAMA: char = '\u{094D}';
 const NUKTA: char = '\u{093C}';
 const UNK: &str = "🆒";
+// Orthographic marker, resolved before classification; `ng` is the consonant ङ.
+const ANUSVARA: Unit = "anusvara";
 
 fn consonant(c: char) -> Option<Unit> {
     Some(match c {
@@ -98,7 +100,7 @@ fn vowel_sign(c: char) -> Option<Unit> {
         'ओ' => "o",
         'औ' | 'ऑ' => "O",
         'ँ' => "~",
-        'ं' => "ng",
+        'ं' => ANUSVARA,
         _ => return None,
     })
 }
@@ -139,6 +141,8 @@ fn nasal_assimilation(next: Unit) -> Option<Unit> {
     Some(match next {
         // Anusvara is homorganic before every velar stop (संकट [səŋkəʈ]).
         "k" | "kh" | "g" | "gh" | "ng" | "Gh" => "ng",
+        // Preserve the old doubled-anusvara behavior without conflating it with ङ.
+        ANUSVARA => "ng",
         "c" | "ch" | "j" | "n" | "tt" | "tth" | "dd" | "ddh" | "t" | "th" | "d" | "dh" | "sh"
         | "s" => "n",
         "p" | "ph" | "b" | "bh" | "m" => "m",
@@ -181,7 +185,7 @@ fn transliterate(word: &str) -> Result<Vec<Unit>, Error> {
         // Anything else in the block (danda, digits, avagraha…) is ignored.
     }
     for i in 0..res.len() {
-        if res[i] == "ng" {
+        if res[i] == ANUSVARA {
             res[i] = match res.get(i + 1) {
                 None => "~",
                 Some(next) => nasal_assimilation(next).ok_or_else(|| {
@@ -728,6 +732,37 @@ mod tests {
     fn fixes_velar_nasal_and_jn() {
         assert_eq!(ipa("संकट"), "s ə ŋ k ə ʈ");
         assert_eq!(ipa("ज्ञान"), "ɡ j aː n");
+    }
+
+    #[test]
+    fn velar_nasal_consonant_is_not_anusvara() {
+        assert_eq!(transliterate("ङ").unwrap(), ["ng", "a"]);
+        assert_eq!(ipa("ङ"), "ŋ ə");
+        assert_eq!(ipa("ङा"), "ŋ aː");
+        assert_eq!(ipa("ङि"), "ŋ iː");
+        assert_eq!(ipa("ङ्"), "ŋ");
+        assert_eq!(ipa("अङ्"), "ə ŋ");
+        assert_eq!(ipa("गङ्गा"), "ɡ ə ŋ ɡ aː");
+        assert_eq!(ipa("अङ्ग्रेज़ी"), "ə ŋ ɡ ɾ eː z iː");
+        assert_eq!(ipa("बङ्गाल"), "b ə ŋ ɡ aː l");
+        // Unlike anusvara, the consonant never assimilates or nasalizes a vowel.
+        assert_eq!(ipa("अङ्प"), "ə ŋ p");
+        assert_eq!(ipa("अङ्य"), "ə ŋ j");
+        assert_eq!(ipa("अंङा"), "ə ŋ ŋ aː");
+    }
+
+    #[test]
+    fn anusvara_keeps_contextual_realizations() {
+        assert_eq!(ipa("गंगा"), "ɡ ə ŋ ɡ aː");
+        assert_eq!(ipa("हिंदी"), "ɦ ɪ n d̪ iː");
+        assert_eq!(ipa("संत"), "s ə n t̪");
+        assert_eq!(ipa("अंग्रेज़ी"), "ə ŋ ɡ ɾ eː z iː");
+        assert_eq!(ipa("अंप"), "ə m p");
+        assert_eq!(ipa("अंय"), "ə̃ j");
+        assert_eq!(ipa("अं"), "ə̃");
+        // Preserve the existing behavior even for doubled marks.
+        assert_eq!(transliterate("अंं").unwrap(), ["a", "ng", "~"]);
+        assert_eq!(ipa("अंं"), "ə ŋ");
     }
 
     #[test]
