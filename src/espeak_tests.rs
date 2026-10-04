@@ -179,6 +179,10 @@ fn requested_words_use_merged_inventory() {
         ("de", "Pfad", "pf"),
         ("fa", "چای", "tʃ"),
         ("ar", "جميل", "dʒ"),
+        // Latin American yeísmo: intervocalic ll is the same ʝ as y, not a long j.
+        ("es-419", "calle", "ʝ"),
+        ("es-419", "ella", "ʝ"),
+        ("es-419", "ayer", "ʝ"),
     ] {
         let p = phonemize_espeak(text, voice).unwrap();
         assert!(

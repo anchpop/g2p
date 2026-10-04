@@ -104,7 +104,9 @@ The first consonant's stress/tone/pitch is retained and word/syllable indices
 are remapped; diagnostic `raw` is not rewritten. Japanese long vowels remain
 separate moras. Arabic requests containing ASCII or Arabic-Indic digits are
 refused with `arabic_digits` rather than silently mislabeling spoken numbers.
-Source fixes remove the Persian
+Latin American Spanish `ll` is `ʝ` in every position (the fork's `es_rules`
+had intervocalic `ll` as a long `j`, so ella/calle did not share a token with
+word-initial llegar or with y). Source fixes remove the Persian
 q1 artifact (قهوه `q1ˈahveː` → `qˈahveː`) and Russian mnemonic `^` (царь
 `tsˈɑrɪ^` → `tsˈɑrɪ`); these corrections also appear in `raw`.
 
