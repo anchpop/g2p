@@ -25,6 +25,7 @@
 //!   junk tokens and the letters would pass as real phonemes.
 
 pub use g2p_types::parse::{Parsed, Stress};
+use unicode_normalization::UnicodeNormalization;
 
 /// IPA vowels (monophthongs and near-variants espeak emits across our
 /// languages). Vowels carry stress; `ʲ` never folds onto one.
@@ -41,8 +42,9 @@ fn is_vowel(c: char) -> bool {
     IPA_VOWELS.contains(c)
 }
 
-fn starts_with_vowel(token: &str) -> bool {
-    token.chars().next().is_some_and(is_vowel)
+pub(crate) fn starts_with_vowel(token: &str) -> bool {
+    // Typed inventory spellings are NFC (ã, ẽ, …); classify their base vowel.
+    token.nfd().next().is_some_and(is_vowel)
 }
 
 /// Remove `(xx)` / `(xx-yy)` language-switch markers (2–4 ASCII letters per

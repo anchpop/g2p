@@ -96,9 +96,15 @@ Adjacent vowels still share stress, even across engine-phone separators.
 Cantonese and Vietnamese tone numbers are carried in `tone` on the engine’s
 tone-bearing phone, rather than in `phonemes`; `raw` keeps the original trace.
 Tone codes retain eSpeak’s numbering (1–7), including its contextual tone 7. Length is preserved except for
-the French vowel replacements described above. The Japanese, Mandarin, Korean
-and Thai backend chains are unchanged. Hindi selection is described below;
-neither private Hindi algorithm is changed. Source fixes remove the Persian
+the French vowel replacements described above. All backends then share a
+word-internal geminate pass: identical adjacent consonants become a single
+long token when the inventory supports it (`k k` → `kː`). Different modifiers
+never merge (`k kʰ` stays split), nor do vowels or phones across word boundaries.
+The first consonant's stress/tone/pitch is retained and word/syllable indices
+are remapped; diagnostic `raw` is not rewritten. Japanese long vowels remain
+separate moras. Arabic requests containing ASCII or Arabic-Indic digits are
+refused with `arabic_digits` rather than silently mislabeling spoken numbers.
+Source fixes remove the Persian
 q1 artifact (قهوه `q1ˈahveː` → `qˈahveː`) and Russian mnemonic `^` (царь
 `tsˈɑrɪ^` → `tsˈɑrɪ`); these corrections also appear in `raw`.
 
@@ -216,11 +222,17 @@ espeak's `cmn` voice is not used. `src/mandarin` is a port of g2pM
 small BiLSTM picks the reading for the 791 polyphonic characters from
 sentence context; weights and dictionary are embedded (~1.7 MB). Pinyin
 becomes IPA through the `pinyin_to_ipa` package's tables, precomputed for
-every syllable g2pM can emit. Labels carry a tone number on each syllable's
-tone-bearing phone. Output matches lexide's Python chain on every one of the
-18,357 corpus sentences both can label; text with digits, Latin letters, or
-characters outside the dictionary is refused rather than labeled with a hole
-(the Python chain silently dropped such characters, 2,694 corpus rows).
+every syllable g2pM can emit. Diphthongs use the shared `aɪ aʊ eɪ oʊ`
+tokens rather than Mandarin-only non-syllabic spellings. Labels carry a
+**surface** tone number on each syllable's tone-bearing phone, consistent
+with Japanese's realized H/L targets: in a consecutive third-tone run all
+but the last become tone 2; 不 becomes 2 before citation tone 4 (otherwise 4);
+一 becomes 4 before citation tones 1–3 and 2 before 4. 一 stays 1 finally,
+beside a numeral character, after 第/weekday/compound heads (星期一 统一 唯一), or before 月/号/日. Context uses citation tones across
+word boundaries and soft punctuation, but never across `。！？，；：.!?,;:`.
+This is deterministic sandhi, not prosodic inference. Pinyin and `raw` retain
+lexical tones. Text with digits, Latin letters, or characters outside the
+dictionary is refused rather than labeled with a hole.
 
 ### Hindi
 
@@ -233,7 +245,9 @@ syllable-weight stress rules with syllable spans.
 Hindi uses one set of pronunciation rules across unified dispatch,
 `hindi::phonemize(text)` and `hindi::word(text)`: eligible schwa raising beside
 `ɦ`, final `ɪ`/`ʊ` lengthening, velar anusvara, `ज्ञ` as `ɡ j`, and restoration
-of impossible schwa deletions. Digits and Latin script are explicitly refused
+of impossible schwa deletions. Affricates use the shared untied tokens
+`tʃ tʃʰ dʒ dʒʱ`; unified dispatch also merges word-internal geminates.
+Digits and Latin script are explicitly refused
 rather than leaving holes in the labels. There is no label-version selector.
 
 ## Rust

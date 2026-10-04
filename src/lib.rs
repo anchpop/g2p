@@ -32,6 +32,7 @@ mod data;
 #[cfg(test)]
 mod espeak_tests;
 mod ffi;
+mod geminate;
 pub mod hindi;
 #[cfg(feature = "japanese")]
 pub mod japanese;
@@ -233,7 +234,17 @@ pub fn phonemize(language: Language, text: &str) -> Result<Phonemized, Error> {
         ));
     }
 
-    match source {
+    if lang == "ara" {
+        let digits: String = text
+            .chars()
+            .filter(|c| c.is_ascii_digit() || ('\u{0660}'..='\u{0669}').contains(c))
+            .collect();
+        if !digits.is_empty() {
+            return Err(Error::Unlabelable(format!("arabic_digits:{digits}")));
+        }
+    }
+
+    let mut result = match source {
         LabelSource::Espeak => phonemize_espeak(text, engine_voice(language)),
         LabelSource::Hindi => hindi_phonemized(hindi::phonemize(text)?),
         LabelSource::Mandarin => mandarin_phonemized(mandarin::phonemize(text)?),
@@ -243,7 +254,9 @@ pub fn phonemize(language: Language, text: &str) -> Result<Phonemized, Error> {
         LabelSource::Japanese => Err(Error::UnsupportedLanguage(lang.to_string())),
         LabelSource::Thai => thai_phonemized(thai::phonemize(text)?),
         LabelSource::Korean => korean_phonemized(korean::phonemize(text)?),
-    }
+    }?;
+    geminate::merge(&mut result);
+    Ok(result)
 }
 
 fn engine_voice(language: Language) -> &'static str {

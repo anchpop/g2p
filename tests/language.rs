@@ -121,3 +121,72 @@ fn portuguese_default_is_brazilian_and_european_is_supported() {
     assert_ne!(default.phonemes, european.phonemes);
     assert!(!european.phonemes.is_empty());
 }
+
+#[test]
+fn arabic_digits_are_unlabelable_but_words_are_supported() {
+    for text in ["الساعة 10", "الساعة ١٠", "0", "٩"] {
+        assert!(
+            matches!(phonemize_lang("ara", text), Err(Error::Unlabelable(reason)) if reason.starts_with("arabic_digits:")),
+            "{text}"
+        );
+    }
+    assert!(!phonemize_lang("ara", "الساعة").unwrap().phonemes.is_empty());
+}
+
+#[test]
+fn hindi_affricates_and_geminates_use_shared_tokens() {
+    for (text, token) in [
+        ("चाय", "tʃ"),
+        ("छाता", "tʃʰ"),
+        ("जगह", "dʒ"),
+        ("झील", "dʒʱ"),
+        ("पक्का", "kː"),
+    ] {
+        let labels = phonemize_lang("hin", text).unwrap();
+        assert!(
+            labels.phonemes.iter().any(|p| p.as_str() == token),
+            "{text}: {:?}",
+            labels.phonemes
+        );
+        assert_eq!(labels.phonemes.len(), labels.stress.len());
+        for syllable in &labels.syllables {
+            assert!(syllable.start <= syllable.nucleus && syllable.nucleus < syllable.end);
+        }
+    }
+}
+
+#[test]
+fn italian_geminate_and_japanese_moras() {
+    let italian = phonemize_lang("ita", "palla").unwrap();
+    assert!(
+        italian.phonemes.iter().any(|p| p.as_str() == "lː"),
+        "{:?}",
+        italian.phonemes
+    );
+    #[cfg(feature = "japanese")]
+    {
+        let japanese = phonemize_lang("jpn", "おばあさん").unwrap();
+        let pair = japanese
+            .phonemes
+            .windows(2)
+            .position(|p| p[0].as_str() == "a" && p[1].as_str() == "a")
+            .unwrap();
+        assert_ne!(
+            japanese.pitch[pair].as_ref().unwrap().mora,
+            japanese.pitch[pair + 1].as_ref().unwrap().mora
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs uv on PATH and network on first run"]
+fn korean_geminates_use_shared_lengths() {
+    for (text, token) in [("몰라", "lː"), ("언니", "nː")] {
+        let labels = phonemize_lang("kor", text).unwrap();
+        assert!(
+            labels.phonemes.iter().any(|p| p.as_str() == token),
+            "{text}: {:?}",
+            labels.phonemes
+        );
+    }
+}

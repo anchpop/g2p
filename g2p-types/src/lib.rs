@@ -44,8 +44,9 @@ pub struct Phonemized {
     /// compute them — Hindi. Empty for espeak languages.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub syllables: Vec<Syllable>,
-    /// Lexical tone per phoneme for tone languages — Mandarin: the tone
+    /// Surface tone per phoneme for tone languages — Mandarin: the tone
     /// number (1–5) on each syllable's tone-bearing phone, `None` elsewhere.
+    /// Mandarin applies third-tone, 不 and 一 sandhi, without prosodic inference.
     /// Cantonese/Vietnamese preserve eSpeak tone codes (1–7), including
     /// contextual code 7 (Cantonese high fall; Vietnamese clause-final ngang).
     /// Parallel to `phonemes`; empty for languages without tone labels.

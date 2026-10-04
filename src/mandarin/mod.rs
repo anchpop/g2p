@@ -14,7 +14,8 @@
 //! (Duanmu 2007 / Lin 2007 conventions), precomputed for every syllable g2pM
 //! can emit and embedded as `data/syllables.tsv`, so pypinyin's syllable
 //! splitting does not need porting. The tokenization and tone placement are
-//! lexide's `mandarin_labels`: the tone number attaches to the phone that
+//! lexide's `mandarin_labels`, with shared diphthong spellings and surface
+//! third-tone/不/一 sandhi: the tone number attaches to the phone that
 //! carries the pitch contour (or, for the neutral tone, the first vowel-like
 //! phone); pitch letters themselves are not tokens.
 //!
@@ -289,6 +290,11 @@ pub fn phonemize(text: &str) -> Result<Vec<Syllable>, Error> {
         }
     }
 
+    let citation_tones: Vec<_> = readings
+        .iter()
+        .map(|reading| reading.and_then(|r| r.chars().last()?.to_digit(10).map(|t| t as u8)))
+        .collect();
+    let surface_tones = sandhi(&chars, &citation_tones);
     let mut out = Vec::new();
     for (i, reading) in readings.into_iter().enumerate() {
         let Some(reading) = reading else { continue };
@@ -314,6 +320,7 @@ pub fn phonemize(text: &str) -> Result<Vec<Syllable>, Error> {
                 )));
             }
         };
+        let tone = surface_tones[i].unwrap_or(tone);
         let Some(variants) = m.syllables.get(syl) else {
             return Err(Error::Unlabelable(format!(
                 "mandarin_unknown_syllable:{pinyin}"
@@ -357,9 +364,203 @@ pub fn phonemize(text: &str) -> Result<Vec<Syllable>, Error> {
     Ok(out)
 }
 
+/// Realized tones, indexed by source character. Context always uses citation
+/// tones; punctuation other than sentence/clause breaks is transparent.
+fn sandhi(chars: &[char], citation: &[Option<u8>]) -> Vec<Option<u8>> {
+    assert_eq!(chars.len(), citation.len());
+    let mut surface = citation.to_vec();
+    let numeral = |c: char| c.is_ascii_digit() || "〇零一二三四五六七八九十百千万亿".contains(c);
+    let mut next = None;
+    for i in (0..chars.len()).rev() {
+        if "。！？，；：.!?,;:".contains(chars[i]) {
+            next = None;
+            continue;
+        }
+        let Some(tone) = citation[i] else { continue };
+        surface[i] = Some(match chars[i] {
+            '不' => {
+                if next == Some(4) {
+                    2
+                } else {
+                    4
+                }
+            }
+            '一' => {
+                // Ordinal, counting and compound-final uses keep tone 1: 第一,
+                // 十一, 一二, weekdays (星期一 周一 礼拜一), months and dates
+                // (一月 一号 一日), and 一 closing a lexical compound (统一 唯一
+                // 万一 专一 同一 单一 划一 归一 之一 初一 合一 不一 如一).
+                let counting = i.checked_sub(1).is_some_and(|p| {
+                    "第期周拜统唯万专同单划归之初合不如".contains(chars[p]) || numeral(chars[p])
+                }) || chars
+                    .get(i + 1)
+                    .copied()
+                    .is_some_and(|n| "月号日".contains(n) || numeral(n));
+                if counting {
+                    1
+                } else {
+                    match next {
+                        Some(1..=3) => 4,
+                        Some(4) => 2,
+                        _ => 1,
+                    }
+                }
+            }
+            _ if tone == 3 && next == Some(3) => 2,
+            _ => tone,
+        });
+        next = Some(tone);
+    }
+    surface
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn all_table_variants_use_typed_inventory() {
+        for (syllable, variants) in &model().syllables {
+            for variant in variants {
+                for phone in variant {
+                    assert!(
+                        phone.replace('0', "").parse::<crate::Phoneme>().is_ok(),
+                        "{syllable}: {phone}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pure_surface_sandhi() {
+        type Case<'a> = (&'a str, &'a [Option<u8>], &'a [Option<u8>]);
+        let cases: &[Case<'_>] = &[
+            ("你好", &[Some(3), Some(3)], &[Some(2), Some(3)]),
+            (
+                "我很好",
+                &[Some(3), Some(3), Some(3)],
+                &[Some(2), Some(2), Some(3)],
+            ),
+            (
+                "你 好",
+                &[Some(3), None, Some(3)],
+                &[Some(2), None, Some(3)],
+            ),
+            (
+                "你、好",
+                &[Some(3), None, Some(3)],
+                &[Some(2), None, Some(3)],
+            ),
+            ("不对", &[Some(4), Some(4)], &[Some(2), Some(4)]),
+            ("不来", &[Some(4), Some(2)], &[Some(4), Some(2)]),
+            ("不", &[Some(4)], &[Some(4)]),
+            ("一天", &[Some(1), Some(1)], &[Some(4), Some(1)]),
+            ("一年", &[Some(1), Some(2)], &[Some(4), Some(2)]),
+            ("一本", &[Some(1), Some(3)], &[Some(4), Some(3)]),
+            ("一个", &[Some(1), Some(4)], &[Some(2), Some(4)]),
+            ("一", &[Some(1)], &[Some(1)]),
+            (
+                "第一课",
+                &[Some(4), Some(1), Some(4)],
+                &[Some(4), Some(1), Some(4)],
+            ),
+            ("一二", &[Some(1), Some(4)], &[Some(1), Some(4)]),
+            (
+                "星期一开会",
+                &[Some(1), Some(1), Some(1), Some(1), Some(4)],
+                &[Some(1), Some(1), Some(1), Some(1), Some(4)],
+            ),
+            (
+                "周一见",
+                &[Some(1), Some(1), Some(4)],
+                &[Some(1), Some(1), Some(4)],
+            ),
+            ("一月", &[Some(1), Some(4)], &[Some(1), Some(4)]),
+            (
+                "统一思想",
+                &[Some(3), Some(1), Some(1), Some(3)],
+                &[Some(3), Some(1), Some(1), Some(3)],
+            ),
+            (
+                "唯一办法",
+                &[Some(2), Some(1), Some(4), Some(3)],
+                &[Some(2), Some(1), Some(4), Some(3)],
+            ),
+            (
+                "你好；你好",
+                &[Some(3), Some(3), None, Some(3), Some(3)],
+                &[Some(2), Some(3), None, Some(2), Some(3)],
+            ),
+            ("一号", &[Some(1), Some(4)], &[Some(1), Some(4)]),
+            (
+                "二一天",
+                &[Some(4), Some(1), Some(1)],
+                &[Some(4), Some(1), Some(1)],
+            ),
+            // Numeral checks are character-adjacent, not syllable-adjacent.
+            (
+                "二 一天",
+                &[Some(4), None, Some(1), Some(1)],
+                &[Some(4), None, Some(4), Some(1)],
+            ),
+            // 不 and 一 consult citation tone 4 even when the next 不 surfaces as 2.
+            (
+                "一不对",
+                &[Some(1), Some(4), Some(4)],
+                &[Some(2), Some(2), Some(4)],
+            ),
+        ];
+        for &(text, citation, expected) in cases {
+            assert_eq!(
+                sandhi(&text.chars().collect::<Vec<_>>(), citation),
+                expected,
+                "{text}"
+            );
+        }
+        for mark in "。！？，；：.!?,;:".chars() {
+            for (first, tone) in [('你', 3), ('不', 4), ('一', 1)] {
+                assert_eq!(
+                    sandhi(&[first, mark, '好'], &[Some(tone), None, Some(3)]),
+                    [Some(tone), None, Some(3)]
+                );
+            }
+        }
+        for numeral in "〇零一二三四五六七八九十百千万亿0123456789".chars() {
+            assert_eq!(
+                sandhi(&['一', numeral, '天'], &[Some(1), None, Some(4)]),
+                [Some(1), None, Some(4)]
+            );
+            assert_eq!(
+                sandhi(&[numeral, '一', '天'], &[None, Some(1), Some(1)]),
+                [None, Some(1), Some(1)]
+            );
+        }
+    }
+
+    #[test]
+    fn integrated_surface_tones_keep_lexical_pinyin() {
+        for (text, expected) in [
+            ("你好", vec![2, 3]),
+            ("我很好", vec![2, 2, 3]),
+            ("不对", vec![2, 4]),
+            ("一天", vec![4, 1]),
+            ("一年", vec![4, 2]),
+            ("一本", vec![4, 3]),
+            ("一个", vec![2, 4]),
+        ] {
+            let labels = phonemize(text).unwrap();
+            assert_eq!(
+                labels
+                    .iter()
+                    .flat_map(|s| s.tone.iter().flatten().copied())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{text}"
+            );
+        }
+        assert_eq!(phonemize("你好").unwrap()[0].pinyin, "ni3");
+    }
 
     fn labels(text: &str) -> Vec<(String, String)> {
         phonemize(text)
@@ -373,7 +574,7 @@ mod tests {
     fn monophones_come_from_the_dictionary() {
         assert_eq!(
             labels("你好"),
-            [("ni3".into(), "n i".into()), ("hao3".into(), "x au̯".into())]
+            [("ni3".into(), "n i".into()), ("hao3".into(), "x aʊ".into())]
         );
     }
 

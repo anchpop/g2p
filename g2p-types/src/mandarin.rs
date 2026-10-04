@@ -8,7 +8,7 @@ pub struct Syllable {
     /// Pinyin with tone digit, as g2pM emits it (`u:` → `v`, `r5` → `er5`).
     pub pinyin: String,
     pub phonemes: Vec<String>,
-    /// Parallel to `phonemes`: the tone number (1–5) on the tone-bearing
+    /// Parallel to `phonemes`: the surface tone (1–5), after sandhi, on the tone-bearing
     /// phone, `None` elsewhere.
     pub tone: Vec<Option<u8>>,
 }

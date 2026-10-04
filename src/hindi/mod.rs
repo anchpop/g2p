@@ -328,10 +328,10 @@ fn unit_ipa(unit: Unit) -> Option<&'static str> {
         "g" => "ɡ",
         "gh" => "ɡʱ",
         "ng" => "ŋ",
-        "c" => "t͡ʃ",
-        "ch" => "t͡ʃʰ",
-        "j" => "d͡ʒ",
-        "jh" => "d͡ʒʱ",
+        "c" => "tʃ",
+        "ch" => "tʃʰ",
+        "j" => "dʒ",
+        "jh" => "dʒʱ",
         "tt" => "ʈ",
         "tth" => "ʈʰ",
         "dd" => "ɖ",
@@ -473,7 +473,7 @@ fn restore_illegal_deletions(units: &[Unit], retained: &mut [bool]) {
 
 /// `/ə/` next to `/ɦ/` surfaces as `[ɛ]` in Standard Hindi when the `ɦ`
 /// closes the syllable or sits between two schwas: शहर `[ʃɛɦɛr]`, कहना
-/// `[kɛɦnaː]`, बहन `[bɛɦɛn]`, जगह `[d͡ʒəɡɛɦ]`. It stays `[ə]` before an `ɦ` that
+/// `[kɛɦnaː]`, बहन `[bɛɦɛn]`, जगह `[dʒəɡɛɦ]`. It stays `[ə]` before an `ɦ` that
 /// is followed by a full vowel: पहाड़ `[pəɦaːɽ]`, कहानी `[kəɦaːniː]`. Written as
 /// `ɛː`, the chain's only open-mid front vowel.
 fn raise_schwa_beside_h(tokens: &mut [String]) {
@@ -713,7 +713,7 @@ mod tests {
         assert_eq!(ipa("शहर"), "ʃ ɛː ɦ ɛː ɾ");
         assert_eq!(ipa("कहना"), "k ɛː ɦ n aː");
         assert_eq!(ipa("बहन"), "b ɛː ɦ ɛː n");
-        assert_eq!(ipa("जगह"), "d͡ʒ ə ɡ ɛː ɦ");
+        assert_eq!(ipa("जगह"), "dʒ ə ɡ ɛː ɦ");
         // Not before a full vowel.
         assert_eq!(ipa("पहाड़"), "p ə ɦ aː ɽ");
         assert_eq!(ipa("कहानी"), "k ə ɦ aː n iː");
