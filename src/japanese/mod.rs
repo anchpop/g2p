@@ -175,7 +175,12 @@ pub fn phonemize(text: &str) -> Result<Labels, Error> {
         boundary = false;
     }
 
-    let labels = jp.make_label(njd.into());
+    // make_label re-parses each NJD node's reading and unwraps it; kana that
+    // does not split into moras (ヴぁ: katakana ヴ with a hiragana small ぁ)
+    // panics there. The engine is read-only, so recovering is sound.
+    let labels =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| jp.make_label(njd.into())))
+            .map_err(|_| Error::Unlabelable("japanese_unparsable_kana".into()))?;
     if labels.len() < 2 {
         return Ok(Labels::default());
     }
@@ -318,6 +323,14 @@ mod tests {
         assert!(matches!(
             phonemize("早っ"),
             Err(Error::Unlabelable(r)) if r == "japanese_terminal_sokuon"
+        ));
+    }
+
+    #[test]
+    fn unparsable_kana_is_refused() {
+        assert!(matches!(
+            phonemize("ヴぁかやろう"),
+            Err(Error::Unlabelable(r)) if r == "japanese_unparsable_kana"
         ));
     }
 
