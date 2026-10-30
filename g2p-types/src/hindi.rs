@@ -16,6 +16,9 @@ pub struct Syllable {
 /// One Devanagari word's labels.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Word {
+    /// UTF-8 byte range in the original input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_span: Option<(usize, usize)>,
     pub phonemes: Vec<String>,
     pub stress: Vec<Stress>,
     pub syllables: Vec<Syllable>,

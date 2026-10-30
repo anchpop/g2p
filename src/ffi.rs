@@ -58,7 +58,10 @@ unsafe extern "C" {
     pub fn espeak_GetCurrentVoice() -> *mut espeak_VOICE;
     // Internal fork API (dictionary.h), available through our static link.
     // Formats the current post-pitch/length list without retranslating it.
-    pub fn GetTranslatedPhonemeString(phoneme_mode: c_int) -> *const c_char;
+    pub fn GetTranslatedPhonemeStringWithSource(
+        phoneme_mode: c_int,
+        sink: unsafe extern "C" fn(c_int, c_int, c_int),
+    ) -> *const c_char;
     pub fn espeak_ng_SetVoiceByName(name: *const c_char) -> Status;
     pub fn espeak_ng_SetVoiceByProperties(voice_selector: *mut espeak_VOICE) -> Status;
     pub fn espeak_ng_GetStatusCodeMessage(status: Status, buffer: *mut c_char, length: usize);

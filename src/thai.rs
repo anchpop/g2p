@@ -82,6 +82,17 @@ fn spawn() -> Result<Server, String> {
 
 /// vachana's IPA for `text`, via the server.
 pub fn raw_ipa(text: &str) -> Result<String, Error> {
+    Ok(response(text)?.ipa)
+}
+
+#[derive(serde::Deserialize)]
+struct Response {
+    ipa: String,
+    words: Vec<(String, String)>,
+    source_spans: Vec<Option<(usize, usize)>>,
+}
+
+fn response(text: &str) -> Result<Response, Error> {
     let mut guard = SERVER_STATE.lock().unwrap_or_else(|p| p.into_inner());
     if guard.is_none() {
         *guard = Some(spawn());
@@ -111,11 +122,7 @@ pub fn raw_ipa(text: &str) -> Result<String, Error> {
     if let Some(err) = reply.get("error").and_then(|v| v.as_str()) {
         return Err(Error::Synth(format!("vachana: {err}")));
     }
-    reply
-        .get("ipa")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .ok_or_else(|| Error::Synth("thai backend reply lacks ipa".into()))
+    serde_json::from_value(reply).map_err(|e| Error::Synth(format!("thai backend reply: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +255,31 @@ pub fn phonemize(text: &str) -> Result<Labels, Error> {
             latin.join(",")
         )));
     }
-    parse(&raw_ipa(text)?)
+    let response = response(text)?;
+    let mut out = parse(&response.ipa)?;
+    if response.source_spans.len() == response.words.len() {
+        let mut phones = Vec::new();
+        let mut sources = Vec::new();
+        let mut word_spans = Vec::new();
+        for ((_, ipa), source) in response.words.iter().zip(response.source_spans) {
+            let Some(source) = source else {
+                continue;
+            };
+            let Ok(word) = parse(ipa) else {
+                return Ok(out);
+            };
+            let base = phones.len();
+            for (start, end) in word.word_spans {
+                word_spans.push((base + start, base + end));
+                sources.push(source);
+            }
+            phones.extend(word.phonemes);
+        }
+        if phones == out.phonemes && word_spans == out.word_spans {
+            out.word_text_spans = sources;
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

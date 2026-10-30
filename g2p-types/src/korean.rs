@@ -12,4 +12,7 @@ pub struct Labels {
     pub stress: Vec<crate::Stress>,
     /// `[start, end)` per input word (어절).
     pub word_spans: Vec<(usize, usize)>,
+    /// Original eojeol UTF-8 byte ranges; empty when alignment is uncertain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub word_text_spans: Vec<(usize, usize)>,
 }

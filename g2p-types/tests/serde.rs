@@ -70,6 +70,7 @@ fn all_shared_labels_roundtrip_without_engines() {
         phonemes: vec!["a".parse().unwrap()],
         stress: vec![Stress::Primary],
         word_spans: vec![(0, 1)],
+        word_text_spans: vec![(0, 1)],
         syllables: vec![syllable.clone()],
         tone: vec![Some(1)],
         pitch: vec![Some(pitch.clone())],
@@ -81,6 +82,7 @@ fn all_shared_labels_roundtrip_without_engines() {
         word_spans: vec![(0, 1)],
     });
     roundtrip(g2p_types::hindi::Word {
+        text_span: Some((0, 3)),
         phonemes: vec!["a".parse().unwrap()],
         stress: vec![Stress::Primary],
         syllables: vec![syllable],
@@ -93,6 +95,8 @@ fn all_shared_labels_roundtrip_without_engines() {
         tone: vec![None, Some(3)],
     });
     roundtrip(g2p_types::japanese::Labels {
+        word_spans: vec![(0, 1)],
+        word_text_spans: vec![(0, 3)],
         phonemes: vec!["a".parse().unwrap()],
         pitch: vec![Some(pitch)],
         accent_withheld: None,
@@ -104,12 +108,14 @@ fn all_shared_labels_roundtrip_without_engines() {
         stress: vec![Stress::Primary],
         tone: vec![Some(1)],
         word_spans: vec![(0, 1)],
+        word_text_spans: vec![(0, 3)],
     });
     roundtrip(g2p_types::korean::Labels {
         raw: "나".into(),
         phonemes: vec!["n".into(), "a".into()],
         stress: vec![Stress::None; 2],
         word_spans: vec![(0, 2)],
+        word_text_spans: vec![(0, 3)],
     });
 }
 

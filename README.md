@@ -20,6 +20,30 @@ no `ESPEAK_NG_DATA_PATH`, no way to run against mainline espeak by mistake.
   labels: stress and boundaries removed, continuation diacritics folded onto
   the previous token, `ʲ` folded onto a preceding consonant, language-switch
   markers stripped, and the units below merged. See `src/parse.rs`.
+- `word_text_spans` — original-input UTF-8 byte ranges parallel to `word_spans`,
+  ordered and nonoverlapping. Slice the original text, not `raw`. Consecutive
+  phone words with overlapping source ranges become one word span. If any part of
+  an utterance cannot be attributed confidently, this entire field is empty;
+  pronunciation and prosody are still returned. Constructors without source text
+  leave it empty, and old serialized results deserialize with an empty field.
+
+Attribution follows the backend's actual units: Hindi source runs, Mandarin
+characters, Japanese NJD nodes, Korean eojeol, and Thai segmented surfaces.
+Japanese closures spanning nodes merge their source ranges; long vowels and
+kana normalization retain the original byte ranges. Thai repetition uses the
+backend's own pre-expansion tokens, so base plus ๆ owns every repeated phone,
+even when final segmentation splits or joins the copies. Exact backend
+normalization is supported; dropped or unalignable surfaces still fall back.
+eSpeak carries independent, wide character ranges on every phone through its
+list passes, including inserted phones. Dictionary phrases own all consumed
+words; each rendered word owns the union of its phones' ranges. Synthetic
+pronunciation boundaries, clitics, hyphens, and number expansions therefore do
+not require guessed offsets or impose the old packed-position limits.
+
+A 3,000-sentence-per-language attribution sweep covers the twelve course
+languages. Remaining empty attribution can be genuine backend omissions (for
+example an unread Japanese kanji or a Thai token with empty pronunciation),
+not merely unusual spelling or a mismatch between text and phone word counts.
 
 `phonemes` contains the shared `g2p_types::Phoneme` enum, not arbitrary strings.
 `Phoneme::as_str()`/`Display` give its exact IPA spelling; serde stores those same

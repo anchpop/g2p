@@ -28,6 +28,7 @@
 //! Korean the vachana and g2pk backends run as embedded, pinned Python
 //! projects ([`thai`], [`korean`]).
 
+mod attribution;
 mod data;
 #[cfg(test)]
 mod espeak_tests;
@@ -120,17 +121,46 @@ pub enum Error {
 ///
 /// Thread-safe (espeak-ng has global state; calls serialize on a lock).
 fn phonemize_espeak(text: &str, voice: &str) -> Result<Phonemized, Error> {
-    let (raw, framed, language) = phonemize_espeak_traces(text, voice)?;
-    let parsed = parse::parse_framed(&framed, &language);
-    espeak_phonemized(raw, parsed, matches!(language.as_str(), "yue" | "vi"))
+    let (trace, language) = phonemize_espeak_traces(text, voice)?;
+    let (parsed, offsets) = parse::parse_framed_with_offsets(&trace.framed, &language);
+    let boundaries: Vec<_> = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain([text.len()])
+        .collect();
+    let sources = offsets
+        .into_iter()
+        .map(|offset| {
+            let index = trace.sources.partition_point(|&(at, _, _)| at <= offset);
+            let &(_, start, len) = trace.sources.get(index.checked_sub(1)?)?;
+            if start < 0 || len <= 0 {
+                return None;
+            }
+            Some((
+                *boundaries.get(start as usize)?,
+                *boundaries.get((start + len) as usize)?,
+            ))
+        })
+        .collect::<Vec<_>>();
+    espeak_phonemized(
+        trace.raw,
+        parsed,
+        matches!(language.as_str(), "yue" | "vi"),
+        &sources,
+    )
 }
 
-fn espeak_phonemized(raw: String, parsed: Parsed, has_tones: bool) -> Result<Phonemized, Error> {
+fn espeak_phonemized(
+    raw: String,
+    parsed: Parsed,
+    has_tones: bool,
+    sources: &[Option<(usize, usize)>],
+) -> Result<Phonemized, Error> {
     let mut out = Phonemized {
         raw,
         ..Phonemized::default()
     };
-    for (start, end) in parsed.word_spans {
+    for (word, (start, end)) in parsed.word_spans.into_iter().enumerate() {
         let word_start = out.phonemes.len();
         for i in start..end {
             let phone = &parsed.phonemes[i];
@@ -153,6 +183,7 @@ fn espeak_phonemized(raw: String, parsed: Parsed, has_tones: bool) -> Result<Pho
         }
         if out.phonemes.len() > word_start {
             out.word_spans.push((word_start, out.phonemes.len()));
+            out.word_text_spans.push(sources[word].unwrap_or_default());
         }
     }
     Ok(out)
@@ -161,10 +192,10 @@ fn espeak_phonemized(raw: String, parsed: Parsed, has_tones: bool) -> Result<Pho
 /// Just espeak's IPA string for `text` (clauses joined with single spaces).
 #[cfg(test)]
 fn phonemize_espeak_raw(text: &str, voice: &str) -> Result<String, Error> {
-    Ok(phonemize_espeak_traces(text, voice)?.0)
+    Ok(phonemize_espeak_traces(text, voice)?.0.raw)
 }
 
-fn phonemize_espeak_traces(text: &str, voice: &str) -> Result<(String, String, String), Error> {
+fn phonemize_espeak_traces(text: &str, voice: &str) -> Result<(Clause, String), Error> {
     let mut guard = engine()?;
     let engine = guard.as_mut().expect("engine() initializes the engine");
     engine.select_voice(voice)?;
@@ -173,15 +204,24 @@ fn phonemize_espeak_traces(text: &str, voice: &str) -> Result<(String, String, S
         .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
         .collect();
     let clauses = engine.synth(&flat)?;
-    let join = |lines: Vec<String>| {
-        lines
-            .iter()
-            .flat_map(|c| c.split_whitespace())
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    let (raw, framed): (Vec<_>, Vec<_>) = clauses.into_iter().unzip();
-    Ok((join(raw), join(framed), engine.language.clone()))
+    let mut trace = Clause::default();
+    for clause in clauses {
+        if !trace.framed.is_empty() {
+            trace.framed.push(' ');
+        }
+        let base = trace.framed.len();
+        trace.sources.extend(
+            clause
+                .sources
+                .into_iter()
+                .map(|(at, start, len)| (base + at, start, len)),
+        );
+        trace.framed.push_str(&clause.framed);
+        trace.raw.push_str(&clause.raw);
+        trace.raw.push(' ');
+    }
+    trace.raw = trace.raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    Ok((trace, engine.language.clone()))
 }
 
 /// Label source for a language code (ISO 639-3, `zho-hans` for Simplified
@@ -247,7 +287,7 @@ pub fn phonemize(language: Language, text: &str) -> Result<Phonemized, Error> {
     let mut result = match source {
         LabelSource::Espeak => phonemize_espeak(text, engine_voice(language)),
         LabelSource::Hindi => hindi_phonemized(hindi::phonemize(text)?),
-        LabelSource::Mandarin => mandarin_phonemized(mandarin::phonemize(text)?),
+        LabelSource::Mandarin => mandarin_phonemized(mandarin::phonemize(text)?, text),
         #[cfg(feature = "japanese")]
         LabelSource::Japanese => japanese_phonemized(japanese::phonemize(text)?),
         #[cfg(not(feature = "japanese"))]
@@ -256,6 +296,7 @@ pub fn phonemize(language: Language, text: &str) -> Result<Phonemized, Error> {
         LabelSource::Korean => korean_phonemized(korean::phonemize(text)?),
     }?;
     geminate::merge(&mut result);
+    attribution::assign(&mut result, text);
     Ok(result)
 }
 
@@ -279,6 +320,7 @@ fn korean_phonemized(labels: korean::Labels) -> Result<Phonemized, Error> {
             .collect::<Result<_, _>>()?,
         stress: labels.stress,
         word_spans: labels.word_spans,
+        word_text_spans: labels.word_text_spans,
         ..Phonemized::default()
     })
 }
@@ -294,21 +336,25 @@ fn thai_phonemized(labels: thai::Labels) -> Result<Phonemized, Error> {
             .collect::<Result<_, _>>()?,
         stress: labels.stress,
         word_spans: labels.word_spans,
+        word_text_spans: labels.word_text_spans,
         tone: labels.tone,
         ..Phonemized::default()
     })
 }
 
-/// Japanese labels in the common shape: one word span for the utterance
-/// (OpenJTalk's word boundaries are not part of the label), no stress, the
-/// pitch factor, and OpenJTalk's phone string as `raw`.
+/// Japanese NJD-node word boundaries, pitch factors, and native phone trace.
 #[cfg(feature = "japanese")]
 fn japanese_phonemized(labels: japanese::Labels) -> Result<Phonemized, Error> {
     let n = labels.phonemes.len();
     Ok(Phonemized {
         raw: labels.native_phones.join(" "),
         stress: vec![Stress::None; n],
-        word_spans: if n == 0 { Vec::new() } else { vec![(0, n)] },
+        word_spans: if labels.word_spans.is_empty() && n != 0 {
+            vec![(0, n)]
+        } else {
+            labels.word_spans
+        },
+        word_text_spans: labels.word_text_spans,
         phonemes: labels
             .phonemes
             .iter()
@@ -322,8 +368,15 @@ fn japanese_phonemized(labels: japanese::Labels) -> Result<Phonemized, Error> {
 
 /// Flatten per-syllable Mandarin labels into the common shape: one word span
 /// per syllable, no stress, tone on the bearing phone, and pinyin as `raw`.
-fn mandarin_phonemized(syllables: Vec<mandarin::Syllable>) -> Result<Phonemized, Error> {
-    let mut out = Phonemized::default();
+fn mandarin_phonemized(
+    syllables: Vec<mandarin::Syllable>,
+    text: &str,
+) -> Result<Phonemized, Error> {
+    let surfaces: Vec<_> = syllables.iter().map(|s| s.char.to_string()).collect();
+    let mut out = Phonemized {
+        word_text_spans: attribution::align(text, surfaces.iter().map(String::as_str)),
+        ..Phonemized::default()
+    };
     let mut pinyin = Vec::with_capacity(syllables.len());
     for s in syllables {
         let start = out.phonemes.len();
@@ -348,6 +401,7 @@ fn hindi_phonemized(words: Vec<hindi::Word>) -> Result<Phonemized, Error> {
     let mut out = Phonemized::default();
     let mut raw_words = Vec::with_capacity(words.len());
     for w in words {
+        out.word_text_spans.push(w.text_span.unwrap_or_default());
         let start = out.phonemes.len();
         out.syllables
             .extend(w.syllables.into_iter().map(|s| Syllable {
@@ -377,9 +431,21 @@ struct Engine {
 
 static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
 
+#[derive(Default)]
+struct Clause {
+    raw: String,
+    framed: String,
+    // Rendered byte offset, absolute source character index, source length.
+    sources: Vec<(usize, i32, i32)>,
+}
+
 thread_local! {
-    /// Raw and phone-separated renderings of the SAME post-pitch/length clause.
-    static CLAUSES: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+    static CLAUSES: RefCell<Vec<Clause>> = const { RefCell::new(Vec::new()) };
+    static WORD_SOURCES: RefCell<Vec<(usize, i32, i32)>> = const { RefCell::new(Vec::new()) };
+}
+
+unsafe extern "C" fn collect_word_source(offset: i32, start: i32, len: i32) {
+    WORD_SOURCES.with(|s| s.borrow_mut().push((offset as usize, start, len)));
 }
 
 unsafe extern "C" fn discard_audio(
@@ -401,13 +467,21 @@ unsafe extern "C" fn collect_clause(s: *const std::os::raw::c_char) -> std::os::
         // copied first, and the separated result copied before returning.
         // It only formats the current list; there is no second synthesis.
         let framed = unsafe {
-            CStr::from_ptr(ffi::GetTranslatedPhonemeString(
+            CStr::from_ptr(ffi::GetTranslatedPhonemeStringWithSource(
                 ffi::ESPEAK_PHONEMES_IPA | ((parse::PHONE_SEPARATOR as i32) << 8),
+                collect_word_source,
             ))
         }
         .to_string_lossy()
         .into_owned();
-        CLAUSES.with(|c| c.borrow_mut().push((line, framed)));
+        let sources = WORD_SOURCES.with(|s| std::mem::take(&mut *s.borrow_mut()));
+        CLAUSES.with(|c| {
+            c.borrow_mut().push(Clause {
+                raw: line,
+                framed,
+                sources,
+            })
+        });
     }
     0
 }
@@ -509,7 +583,7 @@ impl Engine {
         Ok(())
     }
 
-    fn synth(&mut self, text: &str) -> Result<Vec<(String, String)>, Error> {
+    fn synth(&mut self, text: &str) -> Result<Vec<Clause>, Error> {
         let c_text = CString::new(text).map_err(|_| Error::NulByte)?;
         CLAUSES.with(|c| c.borrow_mut().clear());
         // SAFETY: `size` includes the terminating NUL as the API requires;

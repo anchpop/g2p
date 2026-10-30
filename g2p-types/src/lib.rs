@@ -40,6 +40,10 @@ pub struct Phonemized {
     pub stress: Vec<Stress>,
     /// `[start, end)` ranges into `phonemes`, one per word when known.
     pub word_spans: Vec<(usize, usize)>,
+    /// Original-input UTF-8 byte ranges, parallel to `word_spans`. Ordered and
+    /// nonoverlapping; empty for the entire utterance when attribution is uncertain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub word_text_spans: Vec<(usize, usize)>,
     /// Syllable spans (absolute indices into `phonemes`) for backends that
     /// compute them — Hindi. Empty for espeak languages.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -150,6 +154,7 @@ mod tests {
         );
         assert_eq!(target.raw, " | t͡ʃ oʊ | ts ãː || ");
         assert_eq!(target.word_spans, [(0, 2), (2, 4)]);
+        assert!(target.word_text_spans.is_empty());
         assert!(target.stress.is_empty() && target.tone.is_empty() && target.pitch.is_empty());
         assert!(
             Phonemized::from_ipa_tokens(" | ")

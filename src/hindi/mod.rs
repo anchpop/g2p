@@ -597,6 +597,7 @@ pub fn word(word: &str) -> Result<Word, Error> {
         let phonemes: Vec<String> = tokens.iter().map(|t| t.to_string()).collect();
         let (stress, syllables) = assign_stress(&phonemes);
         return Ok(Word {
+            text_span: Some((0, word.len())),
             phonemes,
             stress,
             syllables,
@@ -646,6 +647,7 @@ pub fn word(word: &str) -> Result<Word, Error> {
     neutralize_final_high_vowels(&mut phonemes);
     let (stress, syllables) = assign_stress(&phonemes);
     Ok(Word {
+        text_span: Some((0, word.len())),
         phonemes,
         stress,
         syllables,
@@ -677,10 +679,12 @@ pub fn phonemize(text: &str) -> Result<Vec<Word>, Error> {
     }
     let mut words = Vec::new();
     for run in text
-        .split(|c: char| !in_devanagari_block(c))
+        .split(|c: char| !in_devanagari_block(c) && !matches!(c, '\u{200c}' | '\u{200d}'))
         .filter(|w| !w.is_empty())
     {
-        let w = word(run)?;
+        let mut w = word(run)?;
+        let start = run.as_ptr() as usize - text.as_ptr() as usize;
+        w.text_span = Some((start, start + run.len()));
         if !w.phonemes.is_empty() {
             words.push(w);
         }

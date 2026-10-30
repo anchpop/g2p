@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn moraic_and_tone_bearing_phones_remain_separate() {
-        // Japanese gives one word span per utterance; ɴ ɴ across a pause are two moras.
+        // An imported utterance span can contain two separate Japanese moras.
         let mut p = Phonemized::from_ipa_tokens("ɯᵝ ɴ ɴ").unwrap();
         let original = p.clone();
         merge(&mut p);
@@ -114,6 +114,7 @@ mod tests {
     #[test]
     fn preserves_first_metadata_and_reindexes_syllables() {
         let mut p = Phonemized::from_ipa_tokens("a k k a | n n a").unwrap();
+        p.word_text_spans = vec![(0, 6), (7, 10)];
         p.stress = vec![
             Stress::None,
             Stress::Primary,
@@ -169,6 +170,7 @@ mod tests {
         assert_eq!(p.tone, [Some(2), None, Some(3), None, Some(4)]);
         assert_eq!(p.pitch, [Some(pitch), None, None, None, None]);
         assert_eq!(p.word_spans, [(0, 3), (3, 5)]);
+        assert_eq!(p.word_text_spans, [(0, 6), (7, 10)]);
         assert_eq!(
             p.syllables
                 .iter()

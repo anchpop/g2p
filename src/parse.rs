@@ -36,7 +36,7 @@ pub const IPA_VOWELS: &str = "iyɨʉɯuɪʏʊeøɘɵɤoəɛœɜɞʌɔæɐaɶɑɒ
 /// nasalized, centralized, dental, syllabic, raised, and pharyngealization.
 pub const CONTINUATIONS: &str = "ːˑ̠̞̯̥̪̩̝̃̊̈ˤ";
 
-pub const WORD_BOUNDARIES: &str = " \t\n|_-";
+pub const WORD_BOUNDARIES: &str = " \t\n|_";
 
 fn is_vowel(c: char) -> bool {
     IPA_VOWELS.contains(c)
@@ -92,15 +92,23 @@ fn marker_len(s: &[char]) -> Option<usize> {
 /// Use [`crate::phonemize`] for current model labels: it also reads the
 /// engine's phoneme boundaries, which cannot be recovered from raw IPA.
 pub fn parse(raw: &str) -> Parsed {
-    parse_impl(raw, None)
+    parse_impl(raw, None, &mut Vec::new())
 }
 
 /// Private trace separator (not a word boundary). The renderer suppresses
 /// separators before modifiers, matching our continuation/palatalization rule.
 pub(crate) const PHONE_SEPARATOR: char = '\u{1f}';
 
+#[cfg(test)]
 pub(crate) fn parse_framed(raw: &str, language: &str) -> Parsed {
-    let mut parsed = parse_impl(raw, Some(language));
+    parse_framed_with_offsets(raw, language).0
+}
+
+/// Rendered byte offset of the first phone of each parsed word. Captured in
+/// the parser itself, including dropped empty words and phone-unit merges.
+pub(crate) fn parse_framed_with_offsets(raw: &str, language: &str) -> (Parsed, Vec<usize>) {
+    let mut offsets = Vec::new();
+    let mut parsed = parse_impl(raw, Some(language), &mut offsets);
     // Use the requested language even for eSpeak's code-switched loanwords.
     // These replacements are one-to-one, preserving every aligned field.
     for phone in &mut parsed.phonemes {
@@ -123,7 +131,7 @@ pub(crate) fn parse_framed(raw: &str, language: &str) -> Parsed {
         };
         *phone = replacement.to_owned();
     }
-    parsed
+    (parsed, offsets)
 }
 
 #[derive(Clone)]
@@ -134,7 +142,7 @@ struct Origin {
     language: String,
 }
 
-fn parse_impl(raw: &str, language: Option<&str>) -> Parsed {
+fn parse_impl(raw: &str, language: Option<&str>, word_offsets: &mut Vec<usize>) -> Parsed {
     let framed = language.is_some();
     let default_language = language.unwrap_or("").to_ascii_lowercase();
     let mut origin = Origin {
@@ -143,7 +151,7 @@ fn parse_impl(raw: &str, language: Option<&str>) -> Parsed {
         language: default_language.clone(),
     };
     let mut origins = Vec::new();
-    let chars: Vec<char> = raw.chars().collect();
+    let (byte_offsets, chars): (Vec<_>, Vec<_>) = raw.char_indices().unzip();
     let mut p = Parsed::default();
     let mut word_start = 0usize;
     let mut pending: Option<Stress> = None;
@@ -179,9 +187,11 @@ fn parse_impl(raw: &str, language: Option<&str>) -> Parsed {
             // Do not reset stress: adjacent vowels historically share it.
             continue;
         }
-        if "\"().?^".contains(ch) {
+        if "\"().?^-".contains(ch) {
             // Punctuation/syllable separators are not phones. Discard attached
-            // modifiers too: `.ː` must not lengthen the preceding vowel.
+            // modifiers too: `.ː` must not lengthen the preceding vowel. `-`
+            // ends phoneme names with no IPA spelling (French `e-` in "les"),
+            // so it falls inside words and never marks a boundary.
             while i < chars.len()
                 && (CONTINUATIONS.contains(chars[i]) || chars[i] == PHONE_SEPARATOR)
             {
@@ -244,6 +254,9 @@ fn parse_impl(raw: &str, language: Option<&str>) -> Parsed {
             p.stress.push(Stress::None);
         }
         if p.phonemes.len() > before {
+            if before == word_start {
+                word_offsets.push(byte_offsets[i - 1]);
+            }
             origins.push(origin.clone());
         }
     }

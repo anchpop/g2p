@@ -357,7 +357,10 @@ pub fn phonemize(text: &str) -> Result<Labels, Error> {
     if clauses.is_empty() {
         return Ok(Labels::default());
     }
-    labels(&pronunciations(&clauses)?)
+    let mut out = labels(&pronunciations(&clauses)?)?;
+    out.word_text_spans =
+        crate::attribution::align(text, clauses.iter().flatten().map(String::as_str));
+    Ok(out)
 }
 
 #[cfg(test)]

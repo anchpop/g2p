@@ -175,6 +175,43 @@ pub fn phonemize(text: &str) -> Result<Labels, Error> {
         boundary = false;
     }
 
+    // Keep each native phone attached to its NJD node, and verify the complete
+    // sequence against JPCommon below (not merely a matching phone count).
+    let mut node_phones: Vec<(String, usize)> = Vec::new();
+    let mut surfaces = Vec::new();
+    for node in &njd.nodes {
+        if node.get_pron().mora_size() == 0 {
+            continue;
+        }
+        let owner = surfaces.len();
+        surfaces.push(node.get_string().to_owned());
+        for mora in node.get_pron().moras() {
+            let (consonant, vowel) = mora.phonemes();
+            if let Some(c) = consonant {
+                let mut phone = c.to_string();
+                if phone == "-" {
+                    phone = node_phones
+                        .last()
+                        .map(|(p, _)| p.clone())
+                        .unwrap_or_default();
+                }
+                node_phones.push((phone, owner));
+            }
+            if let Some(v) = vowel {
+                let phone = if v.to_string() == "-" {
+                    node_phones
+                        .last()
+                        .map(|(p, _)| p.clone())
+                        .unwrap_or_default()
+                } else {
+                    v.to_string()
+                };
+                node_phones.push((phone, owner));
+            }
+        }
+    }
+    let text_spans = normalized_spans(text, &surfaces);
+
     // make_label re-parses each NJD node's reading and unwraps it; kana that
     // does not split into moras (ヴぁ: katakana ヴ with a hiragana small ぁ)
     // panics there. The engine is read-only, so recovering is sound.
@@ -189,6 +226,13 @@ pub fn phonemize(text: &str) -> Result<Labels, Error> {
         .map(|l| l.phoneme.c.clone().unwrap_or_default())
         .collect();
 
+    let aligned = native
+        .iter()
+        .filter(|p| !matches!(p.as_str(), "pau" | "sil"))
+        .eq(node_phones.iter().map(|(p, _)| p));
+    let mut native_index = 0;
+    let mut owners = Vec::new();
+    let mut closure_owner = None;
     let mut phonemes: Vec<String> = Vec::new();
     let mut pitch: Vec<Option<Pitch>> = Vec::new();
     let mut geminate = false;
@@ -201,7 +245,12 @@ pub fn phonemize(text: &str) -> Result<Labels, Error> {
             current_key = None;
             continue;
         }
+        let mut owner = node_phones
+            .get(native_index)
+            .map(|(_, owner)| (*owner, *owner));
+        native_index += 1;
         if phone == "cl" {
+            closure_owner = owner;
             if geminate {
                 return Err(Error::Unlabelable("japanese_double_closure".into()));
             }
@@ -215,6 +264,9 @@ pub fn phonemize(text: &str) -> Result<Labels, Error> {
         };
         let mut mapped = mapped.to_string();
         if geminate {
+            owner = closure_owner
+                .zip(owner)
+                .map(|(closure, current)| (closure.0, current.1));
             if !geminable(phone) {
                 return Err(Error::Unlabelable("japanese_ungeminable_closure".into()));
             }
@@ -245,12 +297,38 @@ pub fn phonemize(text: &str) -> Result<Labels, Error> {
             level: tokyo_pitch_level(mora.position_forward, info.nucleus, info.moras),
         }));
         phonemes.push(mapped);
+        owners.push(owner);
     }
     if geminate {
         return Err(Error::Unlabelable("japanese_terminal_sokuon".into()));
     }
 
+    let mut word_spans: Vec<(usize, usize)> = Vec::new();
+    let mut word_text_spans = Vec::new();
+    if aligned {
+        let mut previous = None;
+        for (index, owner) in owners.into_iter().enumerate() {
+            if previous == owner && !word_spans.is_empty() {
+                word_spans.last_mut().unwrap().1 = index + 1;
+            } else {
+                word_spans.push((index, index + 1));
+                word_text_spans.push(
+                    owner
+                        .and_then(|(start, end)| {
+                            Some((text_spans.get(start)?.0, text_spans.get(end)?.1))
+                        })
+                        .unwrap_or_default(),
+                );
+            }
+            previous = owner;
+        }
+    }
+    if word_text_spans.contains(&(0, 0)) {
+        word_text_spans.clear();
+    }
     let mut out = Labels {
+        word_spans,
+        word_text_spans,
         phonemes,
         pitch: Vec::new(),
         accent_withheld: None,
@@ -279,6 +357,40 @@ pub fn phonemize(text: &str) -> Result<Labels, Error> {
         out.pitch = pitch;
     }
     Ok(out)
+}
+
+// Map normalization groups back to original UTF-8 boundaries. Rewrites of the
+// NJD surfaces themselves (such as number readings) must still align exactly.
+fn normalized_spans(text: &str, surfaces: &[String]) -> Vec<(usize, usize)> {
+    use jpreprocess::normalize_text_for_naist_jdic as normalize;
+    let mut normalized = String::new();
+    let mut boundaries = std::collections::BTreeMap::new();
+    let mut chars = text.char_indices().peekable();
+    while let Some((byte, c)) = chars.next() {
+        boundaries.insert(normalized.len(), byte);
+        let mut end = byte + c.len_utf8();
+        // NAIST normalization combines a following voicing mark with its kana.
+        // Keep that exact input group indivisible in the byte map.
+        if let Some(&(next, mark)) = chars.peek()
+            && matches!(
+                mark,
+                '\u{3099}' | '\u{309a}' | '\u{309b}' | '\u{309c}' | '\u{ff9e}' | '\u{ff9f}'
+            )
+        {
+            end = next + mark.len_utf8();
+            chars.next();
+        }
+        normalized.push_str(&normalize(&text[byte..end]));
+    }
+    boundaries.insert(normalized.len(), text.len());
+    if normalized != normalize(text) {
+        return Vec::new();
+    }
+    crate::attribution::align(&normalized, surfaces.iter().map(String::as_str))
+        .into_iter()
+        .map(|(start, end)| Some((*boundaries.get(&start)?, *boundaries.get(&end)?)))
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -25,6 +25,19 @@ fn french_liaison_is_phrase_level() {
 }
 
 #[test]
+fn french_liaison_consonant_belongs_to_its_own_word() {
+    // The /z/ of "les amis" is the latent final consonant of "les", so it
+    // ends that word's span instead of starting the next one.
+    let r = phonemize_espeak("les amis", "fr-fr").unwrap();
+    let words: Vec<String> = r
+        .word_spans
+        .iter()
+        .map(|&(start, end)| r.phonemes[start..end].join(""))
+        .collect();
+    assert_eq!(words, ["lez", "ami"], "{r:?}");
+}
+
+#[test]
 fn raw_keeps_boundaries_and_stress() {
     let r = phonemize_espeak("on est là", "fr-fr").unwrap();
     assert!(r.raw.contains(' '), "{:?}", r.raw);

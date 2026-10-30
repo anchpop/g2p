@@ -12,4 +12,7 @@ pub struct Labels {
     pub tone: Vec<Option<u8>>,
     /// `[start, end)` per word (vachana's space-separated tokens).
     pub word_spans: Vec<(usize, usize)>,
+    /// Exact original-input byte ranges, or empty when normalization obscures them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub word_text_spans: Vec<(usize, usize)>,
 }
