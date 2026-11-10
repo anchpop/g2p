@@ -24,9 +24,11 @@
 //! audio has speech — g2pM passes such characters through and lexide's
 //! pipeline silently dropped them.
 
-use crate::Error;
+use crate::{Error, Reading};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use unicode_normalization::UnicodeNormalization;
 
 const EMBED: usize = 64;
 const HIDDEN: usize = 32;
@@ -233,11 +235,72 @@ impl Model {
 
 pub use g2p_types::mandarin::Syllable;
 
-/// Readings for every Han character in `text` (g2pM), one [`Syllable`] per
-/// character. Punctuation and whitespace are skipped. Digits, Latin letters,
-/// and characters g2pM has no reading for are refused.
-pub fn phonemize(text: &str) -> Result<Vec<Syllable>, Error> {
+/// Pinyin as g2pM spells it: ASCII syllable, `v` for ü, tone digit 1–5.
+fn numbered(syllable: &str) -> Option<String> {
+    let mut tone = None;
+    let mut base = String::new();
+    for c in syllable.to_lowercase().replace("u:", "v").nfd() {
+        let mark = match c {
+            '\u{0304}' | '1' => 1,
+            '\u{0301}' | '2' => 2,
+            '\u{030c}' | '3' => 3,
+            '\u{0300}' | '4' => 4,
+            '5' => 5,
+            // NFD ü is u + diaeresis.
+            '\u{0308}' if base.ends_with('u') => {
+                base.pop();
+                base.push('v');
+                continue;
+            }
+            'a'..='z' => {
+                base.push(c);
+                continue;
+            }
+            _ => return None,
+        };
+        if tone.replace(mark).is_some() {
+            return None;
+        }
+    }
+    (!base.is_empty()).then(|| format!("{base}{}", tone.unwrap_or(5)))
+}
+
+/// Each supplied reading as one g2pM syllable per character index of `text`.
+fn supplied(text: &str, readings: &[Reading]) -> Result<Vec<Option<String>>, Error> {
+    let mut out = vec![None; text.chars().count()];
+    for reading in readings {
+        let refuse = || Error::Unlabelable(format!("mandarin_reading:{}", reading.reading));
+        let stretch = text.get(reading.start..reading.end).ok_or_else(refuse)?;
+        let first = text[..reading.start].chars().count();
+        let spoken: Vec<_> = stretch
+            .chars()
+            .enumerate()
+            .filter(|(_, c)| c.is_alphanumeric())
+            .map(|(i, _)| first + i)
+            .collect();
+        let syllables: Vec<_> = reading.reading.split_whitespace().collect();
+        if spoken.len() != syllables.len() {
+            return Err(refuse());
+        }
+        for (index, syllable) in spoken.into_iter().zip(syllables) {
+            if out[index]
+                .replace(numbered(syllable).ok_or_else(refuse)?)
+                .is_some()
+            {
+                return Err(refuse());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// One [`Syllable`] per Han character in `text`: the supplied reading where
+/// there is one, g2pM's otherwise. Punctuation and whitespace are skipped.
+/// Digits, Latin letters, and characters with neither a supplied reading nor
+/// a g2pM one are refused.
+pub fn phonemize(text: &str, readings: &[Reading]) -> Result<Vec<Syllable>, Error> {
     let m = model();
+    let mut supplied = supplied(text, readings)?;
     let digits: String = text
         .chars()
         .filter(|c| c.is_ascii_digit() || ('０'..='９').contains(c))
@@ -261,15 +324,19 @@ pub fn phonemize(text: &str) -> Result<Vec<Syllable>, Error> {
     let mut ids: Vec<usize> = Vec::with_capacity(chars.len() + 2);
     ids.push(BOS);
     let mut poly: Vec<usize> = Vec::new();
-    let mut readings: Vec<Option<&str>> = Vec::with_capacity(chars.len());
+    let mut readings: Vec<Option<Cow<str>>> = Vec::with_capacity(chars.len());
     for (i, &c) in chars.iter().enumerate() {
         ids.push(m.char_index.get(&c).copied().unwrap_or(UNK));
+        if let Some(known) = supplied[i].take() {
+            readings.push(Some(known.into()));
+            continue;
+        }
         match m.cedict.get(&c) {
             Some(prons) if prons.len() > 1 => {
                 poly.push(i + 1);
                 readings.push(None);
             }
-            Some(prons) => readings.push(Some(prons[0])),
+            Some(prons) => readings.push(Some(prons[0].into())),
             None => {
                 // Anything letter-like without a reading — a rare Han
                 // character, kana, Hangul, fullwidth or accented Latin — is
@@ -286,13 +353,17 @@ pub fn phonemize(text: &str) -> Result<Vec<Syllable>, Error> {
     if !poly.is_empty() {
         let preds = m.predict(&ids, &poly);
         for (&t, cls) in poly.iter().zip(preds) {
-            readings[t - 1] = Some(m.classes[cls]);
+            readings[t - 1] = Some(m.classes[cls].into());
         }
     }
 
     let citation_tones: Vec<_> = readings
         .iter()
-        .map(|reading| reading.and_then(|r| r.chars().last()?.to_digit(10).map(|t| t as u8)))
+        .map(|reading| {
+            reading
+                .as_ref()
+                .and_then(|r| r.chars().last()?.to_digit(10).map(|t| t as u8))
+        })
         .collect();
     let surface_tones = sandhi(&chars, &citation_tones);
     let mut out = Vec::new();
@@ -377,15 +448,17 @@ fn sandhi(chars: &[char], citation: &[Option<u8>]) -> Vec<Option<u8>> {
             continue;
         }
         let Some(tone) = citation[i] else { continue };
+        // The 不 and 一 rules are about bù and yī. A supplied reading can be
+        // another word written the same way: neutral in 对不起, fǒu for 不.
         surface[i] = Some(match chars[i] {
-            '不' => {
+            '不' if tone == 4 => {
                 if next == Some(4) {
                     2
                 } else {
                     4
                 }
             }
-            '一' => {
+            '一' if tone == 1 => {
                 // Ordinal, counting and compound-final uses keep tone 1: 第一,
                 // 十一, 一二, weekdays (星期一 周一 礼拜一), months and dates
                 // (一月 一号 一日), and 一 closing a lexical compound (统一 唯一
@@ -417,6 +490,81 @@ fn sandhi(chars: &[char], citation: &[Option<u8>]) -> Vec<Option<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn phonemize(text: &str) -> Result<Vec<Syllable>, Error> {
+        super::phonemize(text, &[])
+    }
+
+    fn reading(text: &str, of: &str, reading: &str) -> Reading {
+        let start = text.find(of).unwrap();
+        Reading {
+            start,
+            end: start + of.len(),
+            reading: reading.into(),
+        }
+    }
+
+    #[test]
+    fn supplied_readings_replace_the_predictor() {
+        let pinyin = |text: &str, readings: &[Reading]| {
+            super::phonemize(text, readings)
+                .unwrap()
+                .into_iter()
+                .map(|s| s.pinyin)
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        // Alone, 得 has no context; the caller says which word it is.
+        assert_eq!(pinyin("得", &[]), "de2");
+        assert_eq!(pinyin("得", &[reading("得", "得", "děi")]), "dei3");
+        assert_eq!(pinyin("得", &[reading("得", "得", "de")]), "de5");
+        // One syllable per character, numbered or tone-marked, ü either way.
+        let text = "我的女儿在这儿";
+        assert_eq!(
+            pinyin(
+                text,
+                &[
+                    reading(text, "女儿", "nǚ ér"),
+                    reading(text, "这儿", "zhe4 r")
+                ]
+            ),
+            "wo3 de5 nv3 er2 zai4 zhe4 er5"
+        );
+        // A character g2pM does not know is labelable once its reading is given.
+        assert!(phonemize("小凪").is_err());
+        assert_eq!(
+            pinyin("小凪", &[reading("小凪", "凪", "zhǐ")]),
+            "xiao3 zhi3"
+        );
+        for bad in ["nǚ", "nǚ ér x", "n3ü", "女"] {
+            assert!(
+                matches!(
+                    super::phonemize(text, &[reading(text, "女儿", bad)]),
+                    Err(Error::Unlabelable(r)) if r.starts_with("mandarin_reading")
+                ),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn supplied_neutral_tones_are_kept_and_sandhi_still_applies() {
+        let tones = |text: &str, readings: &[Reading]| {
+            super::phonemize(text, readings)
+                .unwrap()
+                .into_iter()
+                .map(|s| s.tone.into_iter().flatten().next().unwrap())
+                .collect::<Vec<_>>()
+        };
+        let text = "对不起";
+        assert_eq!(tones(text, &[]), [4, 4, 3]);
+        assert_eq!(tones(text, &[reading(text, "不", "bu")]), [4, 5, 3]);
+        // Readings are citation tones: 不 before a fourth tone still rises.
+        assert_eq!(tones("不对", &[reading("不对", "不", "bù")]), [2, 4]);
+        // The 不 rule is bù's, not the character's.
+        assert_eq!(tones("不", &[reading("不", "不", "fǒu")]), [3]);
+        assert_eq!(tones("你好", &[reading("你好", "你好", "nǐ hǎo")]), [2, 3]);
+    }
 
     #[test]
     fn all_table_variants_use_typed_inventory() {

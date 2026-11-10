@@ -47,7 +47,7 @@ pub mod mandarin;
 pub mod parse;
 pub mod thai;
 
-pub use g2p_types::{LabelSource, Language, Phoneme, Phonemized, Pitch, UnknownPhoneme};
+pub use g2p_types::{LabelSource, Language, Phoneme, Phonemized, Pitch, Reading, UnknownPhoneme};
 pub use hindi::Syllable;
 
 pub use parse::{Parsed, Stress};
@@ -256,6 +256,18 @@ pub fn phonemize_lang(lang: &str, text: &str) -> Result<Phonemized, Error> {
 /// The shared enum only represents supported combinations; no separate
 /// variety or backend selection is needed.
 pub fn phonemize(language: Language, text: &str) -> Result<Phonemized, Error> {
+    phonemize_with_readings(language, text, &[])
+}
+
+/// [`phonemize`], except that each [`Reading`] is pronounced as given rather
+/// than predicted: the result agrees with every reading or is an error.
+/// Japanese and Simplified Mandarin only; elsewhere the spelling already
+/// determines the pronunciation, so a reading is refused.
+pub fn phonemize_with_readings(
+    language: Language,
+    text: &str,
+    readings: &[Reading],
+) -> Result<Phonemized, Error> {
     let lang = language.code();
     let source = label_source(lang).ok_or_else(|| Error::UnsupportedLanguage(lang.to_string()))?;
     // English corpus records can contain Korean instructional speech. Do not
@@ -284,12 +296,16 @@ pub fn phonemize(language: Language, text: &str) -> Result<Phonemized, Error> {
         }
     }
 
+    if !readings.is_empty() && !matches!(source, LabelSource::Mandarin | LabelSource::Japanese) {
+        return Err(Error::Unlabelable(format!("readings_unsupported:{lang}")));
+    }
+
     let mut result = match source {
         LabelSource::Espeak => phonemize_espeak(text, engine_voice(language)),
         LabelSource::Hindi => hindi_phonemized(hindi::phonemize(text)?),
-        LabelSource::Mandarin => mandarin_phonemized(mandarin::phonemize(text)?, text),
+        LabelSource::Mandarin => mandarin_phonemized(mandarin::phonemize(text, readings)?, text),
         #[cfg(feature = "japanese")]
-        LabelSource::Japanese => japanese_phonemized(japanese::phonemize(text)?),
+        LabelSource::Japanese => japanese_phonemized(japanese::phonemize(text, readings)?),
         #[cfg(not(feature = "japanese"))]
         LabelSource::Japanese => Err(Error::UnsupportedLanguage(lang.to_string())),
         LabelSource::Thai => thai_phonemized(thai::phonemize(text)?),

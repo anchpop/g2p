@@ -260,6 +260,44 @@ This is deterministic sandhi, not prosodic inference. Pinyin and `raw` retain
 lexical tones. Text with digits, Latin letters, or characters outside the
 dictionary is refused rather than labeled with a hole.
 
+### Supplied readings (Japanese and Mandarin)
+
+Both languages guess the pronunciation of ambiguous text from context, and a
+caller often knows better: it shows the learner a reading, or the text is one
+word with no context at all (方: かた or ほう?). `phonemize_with_readings`
+takes `Reading { start, end, reading }` items over byte ranges of the text
+and returns labels that agree with every one of them, or an error. Text
+outside the readings is predicted as before, and with no readings the result
+is exactly `phonemize`'s.
+
+* **Mandarin**: pinyin in citation tones, one syllable per character,
+  tone-marked or numbered; no tone is the neutral tone and `r` is erhua. The
+  reading replaces g2pM's choice for that character; sandhi still applies on
+  top, and a supplied neutral tone stays neutral. A syllable outside the
+  table (`zhei4`, `hng`) is refused.
+* **Japanese**: kana for the range. Give each kanji (or indivisible run, as
+  ruby would group it) its own reading: a reading is never split across the
+  tokenizer's words, so finer readings keep more of the dictionary. Words
+  that already say the readings are left alone. A word that does not is
+  replaced by the dictionary's entry with that reading (accent and sound
+  changes intact); when the dictionary has none (names, colloquial forms,
+  mis-tokenized text), a word that says exactly the supplied kana is used and
+  `accent_withheld` is `japanese_reading_not_in_dictionary`. Refused: a word
+  only partly covered by readings (`japanese_reading_partial`); text the
+  front end rewrites so that it no longer lines up with the input, which in
+  practice means digits (`japanese_reading_alignment`); a reading that a
+  later rule overrides even when forced, such as 一 as ひと in 一組, which
+  the number rules rewrite (`japanese_reading_unenforceable`); a reading that
+  is not plain kana (`japanese_reading_not_kana`); and a reading the
+  dictionary lacks that takes in okurigana and has an おう or えい, because
+  it does not say whether that is one long vowel or two
+  (`japanese_reading_vowel_length`).
+
+On Yap's packs (2026-10-25, every displayed reading passed in): Mandarin
+agrees on all 1,484,059 characters, 17 of 191,185 sentences refused for an
+unknown syllable; Japanese leaves 94.5% of 239,205 sentences unchanged, fixes
+4.5% from the dictionary, forces 0.7%, and newly refuses 72.
+
 ### Hindi
 
 espeak's `hi` voice is not used. `src/hindi` is a port of lexide's

@@ -28,6 +28,24 @@ pub struct Pitch {
     pub level: u8,
 }
 
+/// A pronunciation the caller already knows for `text[start..end]`, which
+/// the backend must realize instead of predicting its own. Text outside every
+/// reading is predicted as usual.
+///
+/// * Japanese: kana for exactly that stretch (`方` → `かた`). Give each kanji
+///   or indivisible kanji run its own reading where the alignment is known:
+///   a reading is never split across dictionary words, so finer readings
+///   leave more of the dictionary's accent and sound changes intact.
+/// * Mandarin: pinyin in citation tones, one whitespace-separated syllable
+///   per character, tone-marked (`děi`) or numbered (`dei3`); no tone is the
+///   neutral tone, and `r` is erhua 儿.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Reading {
+    pub start: usize,
+    pub end: usize,
+    pub reading: String,
+}
+
 /// Phonemization of one utterance.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Phonemized {

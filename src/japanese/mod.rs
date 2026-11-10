@@ -23,9 +23,11 @@
 //! Digits and Latin letters are read by the front end (十九時, エーオーエル),
 //! so unlike Hindi and Mandarin they are not refused.
 
-use crate::{Error, Pitch};
+use crate::{Error, Pitch, Reading};
 use jpreprocess::{JPreprocess, SystemDictionaryConfig, kind::JPreprocessDictionaryKind};
 use std::sync::OnceLock;
+
+mod readings;
 
 pub use g2p_types::japanese::Labels;
 
@@ -119,14 +121,22 @@ pub fn tokyo_pitch_level(mora: u8, nucleus: u8, phrase_moras: u8) -> u8 {
     (2 <= mora && mora <= nucleus) as u8
 }
 
-fn engine() -> Result<&'static JPreprocess<jpreprocess::DefaultTokenizer>, Error> {
-    static ENGINE: OnceLock<Result<JPreprocess<jpreprocess::DefaultTokenizer>, String>> =
-        OnceLock::new();
+struct Engine {
+    jp: JPreprocess<jpreprocess::DefaultTokenizer>,
+    /// The same dictionary the tokenizer uses, for looking up a word's other readings.
+    dictionary: jpreprocess::Dictionary,
+}
+
+fn engine() -> Result<&'static Engine, Error> {
+    static ENGINE: OnceLock<Result<Engine, String>> = OnceLock::new();
     ENGINE
         .get_or_init(|| {
             SystemDictionaryConfig::Bundled(JPreprocessDictionaryKind::NaistJdic)
                 .load()
-                .map(|dict| JPreprocess::with_dictionaries(dict, None))
+                .map(|dictionary| Engine {
+                    jp: JPreprocess::with_dictionaries(dictionary.clone(), None),
+                    dictionary,
+                })
                 .map_err(|e| e.to_string())
         })
         .as_ref()
@@ -138,13 +148,12 @@ struct AccentPhrase {
     moras: u8,
 }
 
-/// Label one utterance.
-pub fn phonemize(text: &str) -> Result<Labels, Error> {
-    let jp = engine()?;
-    let mut njd = jp
-        .text_to_njd(text)
-        .map_err(|e| Error::Synth(format!("jpreprocess: {e}")))?;
-    njd.preprocess();
+/// Label one utterance, pronouncing each of `readings` as given (see
+/// [`readings`](self::readings) for how).
+pub fn phonemize(text: &str, readings: &[Reading]) -> Result<Labels, Error> {
+    let engine = engine()?;
+    let jp = &engine.jp;
+    let (njd, forced_reading) = readings::resolve(engine, text, readings)?;
 
     // Accent phrases from the NJD features, before JPCommon rewrites a flat
     // accent (0) to the mora count: heiban and final-mora accent must stay
@@ -334,6 +343,10 @@ pub fn phonemize(text: &str) -> Result<Labels, Error> {
         accent_withheld: None,
         native_phones: native,
     };
+    if forced_reading {
+        out.accent_withheld = Some("japanese_reading_not_in_dictionary".into());
+        return Ok(out);
+    }
     let inconsistent = pitch
         .iter()
         .flatten()
@@ -396,6 +409,10 @@ fn normalized_spans(text: &str, surfaces: &[String]) -> Vec<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn phonemize(text: &str) -> Result<Labels, Error> {
+        super::phonemize(text, &[])
+    }
 
     #[test]
     fn maps_phones_and_gemination() {

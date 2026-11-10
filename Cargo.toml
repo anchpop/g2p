@@ -17,7 +17,7 @@ default = ["japanese"]
 # Japanese labels via jpreprocess + the bundled NAIST dictionary (~85 MB in
 # the binary). Without it `phonemize_lang("jpn", …)` is an
 # `Error::UnsupportedLanguage`.
-japanese = ["dep:jpreprocess"]
+japanese = ["dep:jpreprocess", "dep:jpreprocess-core", "dep:jpreprocess-dictionary"]
 
 [dependencies]
 g2p-types = { path = "g2p-types" }
@@ -26,6 +26,10 @@ dirs = "6"
 # Japanese label source (see src/japanese). Optional because the embedded
 # dictionary adds ~85 MB to the binary.
 jpreprocess = { version = "0.15", features = ["naist-jdic"], optional = true }
+# jpreprocess's own halves, named to build a word from a supplied reading and
+# to read the dictionary's other entries for a surface (src/japanese/readings).
+jpreprocess-core = { version = "0.15", optional = true }
+jpreprocess-dictionary = { version = "0.15", optional = true }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
