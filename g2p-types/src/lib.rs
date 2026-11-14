@@ -38,7 +38,9 @@ pub struct Pitch {
 ///   leave more of the dictionary's accent and sound changes intact.
 /// * Mandarin: pinyin in citation tones, one whitespace-separated syllable
 ///   per character, tone-marked (`děi`) or numbered (`dei3`); no tone is the
-///   neutral tone, and `r` is erhua 儿.
+///   neutral tone, and `r` is erhua 儿. Tone sandhi treats each reading's
+///   stretch as one word, so give one reading per word: 不 + 一样 lets
+///   不一样 be bù yíyàng, and 小 + 老鼠 keeps xiǎo before láoshǔ.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Reading {
     pub start: usize,
@@ -62,6 +64,15 @@ pub struct Phonemized {
     /// nonoverlapping; empty for the entire utterance when attribution is uncertain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub word_text_spans: Vec<(usize, usize)>,
+    /// Original-input UTF-8 byte range each phoneme was spoken from, parallel
+    /// to `phonemes`; each lies within its word's `word_text_spans` entry.
+    /// As fine as the backend knows: the letters an espeak rule, prefix or
+    /// suffix matched (c'est gives `s` to "c" and `ɛ` to "est"), a Japanese
+    /// mora's kana or kanji, a Korean syllable, a Mandarin character; a
+    /// dictionary word, Hindi or Thai word otherwise. Empty whenever
+    /// `word_text_spans` is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phoneme_text_spans: Vec<(usize, usize)>,
     /// Syllable spans (absolute indices into `phonemes`) for backends that
     /// compute them — Hindi. Empty for espeak languages.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

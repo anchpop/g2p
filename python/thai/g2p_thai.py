@@ -7,6 +7,12 @@ spaces, tone diacritics on the first vowel character of each syllable), or
 {"error": "..."}. Surfaces come from the same conversion loop as the IPA.
 `source_spans` carries parallel original UTF-8 byte ranges (null for separators),
 or an empty list when the entire sequence cannot be traced exactly.
+
+A request that also carries the caller's segmentation — {"text": "...",
+"words": ["...", ...]} — is answered with {"word_ipa": ["...", ...]}, one IPA
+string per given word ("" for an unspoken one): each word is converted on its
+own, without pythainlp's segmenter.
+
 The crate tokenizes and labels that string itself (src/thai.rs); this process only
 runs the parts that live in Python.
 
@@ -99,6 +105,41 @@ def source_spans(text, words):
     return spans if at == len(stream) else []
 
 
+def word_ipa(words):
+    """IPA for each of the caller's words, converted as th2ipa converts each
+    token of its own segmentation: the same text preparation (word_chunk
+    without its tokenizer), then vachana's dictionary or TLTK for the word.
+    Cleaning can split a word (punctuation becomes a space); ๆ repeats the
+    piece before it, as expand_maiyamok repeats the token before it."""
+    from pythainlp.util import normalize
+    from vachana_g2p.vachana_g2p import (
+        THAI2PHONE_DICT, clean_text, decode, g2p, number_to_text, validate, word_chunk)
+
+    def piece_ipa(piece):
+        tokens = g2p([piece], decoded=False, return_tokens=True)
+        # TLTK can leave part of a long unknown word untranscribed (ดีพโรส
+        # as ดี|พโรส with only dii0): the syllables it returns do not
+        # validate, and decoding them would silently drop the rest. Such a
+        # word is read as vachana's own segmenter splits it instead.
+        if piece not in THAI2PHONE_DICT and not all(validate(phone) for _, phone in tokens):
+            tokens = g2p(word_chunk(piece), decoded=False, return_tokens=True)
+        return [decode(phone, "ipa") for _, phone in tokens]
+
+    result = []
+    previous = []
+    for word in words:
+        ipa = []
+        prepared = normalize(number_to_text(clean_text(word)))
+        for piece in re.split(r"\s+|(ๆ)", prepared):
+            if not piece:
+                continue
+            if piece != "ๆ":
+                previous = piece_ipa(piece)
+            ipa.extend(previous)
+        result.append(" ".join(ipa))
+    return result
+
+
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "identity":
         print(f"vachana-g2p/{version('vachana-g2p')} pythainlp/{version('pythainlp')}")
@@ -111,7 +152,12 @@ def main() -> None:
         if not line:
             continue
         try:
-            text = json.loads(line)["text"]
+            request = json.loads(line)
+            if "words" in request:
+                out.write(json.dumps({"word_ipa": word_ipa(request["words"])}, ensure_ascii=False) + "\n")
+                out.flush()
+                continue
+            text = request["text"]
             # The exact loop used by th2ipa, retaining each emitted token's
             # surface rather than independently re-tokenizing the input.
             words = g2p(word_chunk(clean_text(text)), transcription="ipa", return_tokens=True)

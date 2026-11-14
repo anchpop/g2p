@@ -186,40 +186,41 @@ pub fn phonemize(text: &str, readings: &[Reading]) -> Result<Labels, Error> {
 
     // Keep each native phone attached to its NJD node, and verify the complete
     // sequence against JPCommon below (not merely a matching phone count).
-    let mut node_phones: Vec<(String, usize)> = Vec::new();
-    let mut surfaces = Vec::new();
-    for node in &njd.nodes {
-        if node.get_pron().mora_size() == 0 {
-            continue;
-        }
-        let owner = surfaces.len();
-        surfaces.push(node.get_string().to_owned());
-        for mora in node.get_pron().moras() {
+    // Each phone also keeps the text of its own mora where that is known.
+    let spoken = || njd.nodes.iter().filter(|n| n.get_pron().mora_size() > 0);
+    let surfaces: Vec<String> = spoken().map(|n| n.get_string().to_owned()).collect();
+    let text_spans = normalized_spans(text, &surfaces);
+    let mut node_phones: Vec<(String, usize, (usize, usize))> = Vec::new();
+    for (owner, node) in spoken().enumerate() {
+        let moras = node.get_pron().moras();
+        let node_span = text_spans.get(owner).copied().unwrap_or_default();
+        let mora_spans = mora_spans(text, node_span, moras.len(), readings);
+        for (m, mora) in moras.iter().enumerate() {
+            let span = mora_spans.as_ref().map_or(node_span, |spans| spans[m]);
             let (consonant, vowel) = mora.phonemes();
             if let Some(c) = consonant {
                 let mut phone = c.to_string();
                 if phone == "-" {
                     phone = node_phones
                         .last()
-                        .map(|(p, _)| p.clone())
+                        .map(|(p, _, _)| p.clone())
                         .unwrap_or_default();
                 }
-                node_phones.push((phone, owner));
+                node_phones.push((phone, owner, span));
             }
             if let Some(v) = vowel {
                 let phone = if v.to_string() == "-" {
                     node_phones
                         .last()
-                        .map(|(p, _)| p.clone())
+                        .map(|(p, _, _)| p.clone())
                         .unwrap_or_default()
                 } else {
                     v.to_string()
                 };
-                node_phones.push((phone, owner));
+                node_phones.push((phone, owner, span));
             }
         }
     }
-    let text_spans = normalized_spans(text, &surfaces);
 
     // make_label re-parses each NJD node's reading and unwraps it; kana that
     // does not split into moras (ヴぁ: katakana ヴ with a hiragana small ぁ)
@@ -238,10 +239,12 @@ pub fn phonemize(text: &str, readings: &[Reading]) -> Result<Labels, Error> {
     let aligned = native
         .iter()
         .filter(|p| !matches!(p.as_str(), "pau" | "sil"))
-        .eq(node_phones.iter().map(|(p, _)| p));
+        .eq(node_phones.iter().map(|(p, _, _)| p));
     let mut native_index = 0;
     let mut owners = Vec::new();
+    let mut spans = Vec::new();
     let mut closure_owner = None;
+    let mut closure_span = None;
     let mut phonemes: Vec<String> = Vec::new();
     let mut pitch: Vec<Option<Pitch>> = Vec::new();
     let mut geminate = false;
@@ -256,10 +259,12 @@ pub fn phonemize(text: &str, readings: &[Reading]) -> Result<Labels, Error> {
         }
         let mut owner = node_phones
             .get(native_index)
-            .map(|(_, owner)| (*owner, *owner));
+            .map(|(_, owner, _)| (*owner, *owner));
+        let mut span = node_phones.get(native_index).map(|&(_, _, span)| span);
         native_index += 1;
         if phone == "cl" {
             closure_owner = owner;
+            closure_span = span;
             if geminate {
                 return Err(Error::Unlabelable("japanese_double_closure".into()));
             }
@@ -276,6 +281,10 @@ pub fn phonemize(text: &str, readings: &[Reading]) -> Result<Labels, Error> {
             owner = closure_owner
                 .zip(owner)
                 .map(|(closure, current)| (closure.0, current.1));
+            // The long consonant is spoken from the っ and the next mora.
+            span = closure_span
+                .zip(span)
+                .map(|(closure, current)| (closure.0.min(current.0), closure.1.max(current.1)));
             if !geminable(phone) {
                 return Err(Error::Unlabelable("japanese_ungeminable_closure".into()));
             }
@@ -307,37 +316,41 @@ pub fn phonemize(text: &str, readings: &[Reading]) -> Result<Labels, Error> {
         }));
         phonemes.push(mapped);
         owners.push(owner);
+        spans.push(span.unwrap_or_default());
     }
     if geminate {
         return Err(Error::Unlabelable("japanese_terminal_sokuon".into()));
     }
 
+    let owner_text = |owner: Option<(usize, usize)>| {
+        owner
+            .and_then(|(start, end)| Some((text_spans.get(start)?.0, text_spans.get(end)?.1)))
+            .unwrap_or_default()
+    };
     let mut word_spans: Vec<(usize, usize)> = Vec::new();
     let mut word_text_spans = Vec::new();
+    let mut phoneme_text_spans = Vec::new();
     if aligned {
+        phoneme_text_spans = spans;
         let mut previous = None;
         for (index, owner) in owners.into_iter().enumerate() {
             if previous == owner && !word_spans.is_empty() {
                 word_spans.last_mut().unwrap().1 = index + 1;
             } else {
                 word_spans.push((index, index + 1));
-                word_text_spans.push(
-                    owner
-                        .and_then(|(start, end)| {
-                            Some((text_spans.get(start)?.0, text_spans.get(end)?.1))
-                        })
-                        .unwrap_or_default(),
-                );
+                word_text_spans.push(owner_text(owner));
             }
             previous = owner;
         }
     }
     if word_text_spans.contains(&(0, 0)) {
         word_text_spans.clear();
+        phoneme_text_spans.clear();
     }
     let mut out = Labels {
         word_spans,
         word_text_spans,
+        phoneme_text_spans,
         phonemes,
         pitch: Vec::new(),
         accent_withheld: None,
@@ -370,6 +383,99 @@ pub fn phonemize(text: &str, readings: &[Reading]) -> Result<Labels, Error> {
         out.pitch = pitch;
     }
     Ok(out)
+}
+
+/// The original text of each of a node's `moras`, when it can be told: kana
+/// say one mora each (a small ゃ or a voicing mark joins the kana before
+/// it), and a run of other characters (kanji, digits) says as many as the
+/// supplied readings that exactly tile it, or, for at most one run without
+/// readings, the moras the kana and the other runs leave over. `None` when
+/// the counts do not add up, so the node's phones keep the node's range.
+fn mora_spans(
+    text: &str,
+    (start, end): (usize, usize),
+    moras: usize,
+    readings: &[Reading],
+) -> Option<Vec<(usize, usize)>> {
+    fn kana(c: char) -> bool {
+        matches!(c, '\u{3041}'..='\u{3096}' | '\u{30A1}'..='\u{30FA}' | 'ー' | '\u{FF66}'..='\u{FF9D}')
+    }
+    fn joins_previous(c: char) -> bool {
+        "ぁぃぅぇぉゃゅょゎァィゥェォャュョヮｧｨｩｪｫｬｭｮ\u{3099}\u{309A}\u{309B}\u{309C}\u{FF9E}\u{FF9F}"
+            .contains(c)
+    }
+    fn kana_moras(reading: &str) -> usize {
+        reading
+            .chars()
+            .filter(|&c| kana(c) && !joins_previous(c))
+            .count()
+    }
+    // (byte range, moras); None for a run without readings.
+    let mut units: Vec<((usize, usize), Option<usize>)> = Vec::new();
+    let mut chars = text.get(start..end)?.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        let unit_start = start + i;
+        let mut unit_end = unit_start + c.len_utf8();
+        if kana(c) && !joins_previous(c) {
+            while let Some(&(j, next)) = chars.peek()
+                && joins_previous(next)
+            {
+                unit_end = start + j + next.len_utf8();
+                chars.next();
+            }
+            units.push(((unit_start, unit_end), Some(1)));
+            continue;
+        }
+        if kana(c) || joins_previous(c) {
+            return None;
+        }
+        while let Some(&(j, next)) = chars.peek()
+            && !kana(next)
+            && !joins_previous(next)
+        {
+            unit_end = start + j + next.len_utf8();
+            chars.next();
+        }
+        // Readings that lie inside the run must tile it exactly.
+        let inside: Vec<&Reading> = readings
+            .iter()
+            .filter(|r| unit_start <= r.start && r.end <= unit_end)
+            .collect();
+        if inside.is_empty() {
+            units.push(((unit_start, unit_end), None));
+            continue;
+        }
+        let mut cursor = unit_start;
+        let mut sorted = inside;
+        sorted.sort_by_key(|r| r.start);
+        for r in sorted {
+            if r.start != cursor {
+                return None;
+            }
+            units.push(((r.start, r.end), Some(kana_moras(&r.reading))));
+            cursor = r.end;
+        }
+        if cursor != unit_end {
+            return None;
+        }
+    }
+    let known: usize = units.iter().filter_map(|(_, n)| *n).sum();
+    let unknown = units.iter().filter(|(_, n)| n.is_none()).count();
+    let left = moras.checked_sub(known)?;
+    match unknown {
+        0 if left == 0 => {}
+        1 if left > 0 => {}
+        _ => return None,
+    }
+    let mut spans = Vec::with_capacity(moras);
+    for (span, n) in units {
+        let n = n.unwrap_or(left);
+        if n == 0 {
+            return None;
+        }
+        spans.extend(std::iter::repeat_n(span, n));
+    }
+    Some(spans)
 }
 
 // Map normalization groups back to original UTF-8 boundaries. Rewrites of the
@@ -456,11 +562,10 @@ mod tests {
     }
 
     #[test]
-    fn unparsable_kana_is_refused() {
-        assert!(matches!(
-            phonemize("ヴぁかやろう"),
-            Err(Error::Unlabelable(r)) if r == "japanese_unparsable_kana"
-        ));
+    fn a_small_kana_in_another_script_joins_its_mora() {
+        // Tokenized as ヴ + ぁ, which make_label could not split into moras
+        // (it panicked); the small kana now joins the ヴ.
+        assert_eq!(phonemize("ヴぁかやろう").unwrap().phonemes[..2], ["v", "a"]);
     }
 
     #[test]

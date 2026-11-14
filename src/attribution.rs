@@ -4,6 +4,22 @@ use crate::Phonemized;
 pub(crate) fn separator(c: char) -> bool {
     c.is_whitespace()
         || ".,!?;:'\"-–—…()[]{}«»‹›‘’“”¿¡·•・．。，、！？；：（）【】「」『』《》〈〉।॥".contains(c)
+        // Subtitle dashes, tildes, quotes, brackets and arrows (Japanese
+        // above all), none of which any backend speaks.
+        || "‐‒―⸺─－~～〜･〝〞〟｢｣❝❞＜＞≪≫〔〕‚„→➡".contains(c)
+}
+
+/// `span` without separators at either end, unless that would empty it.
+pub(crate) fn trim_separators(text: &str, (start, end): (usize, usize)) -> (usize, usize) {
+    let Some(slice) = text.get(start..end) else {
+        return (start, end);
+    };
+    let trimmed = slice.trim_matches(separator);
+    if trimmed.is_empty() {
+        return (start, end);
+    }
+    let lead = slice.len() - slice.trim_start_matches(separator).len();
+    (start + lead, start + lead + trimmed.len())
 }
 
 /// Exact monotonic surface alignment, allowing only unspoken separators in gaps.
@@ -58,6 +74,7 @@ pub(crate) fn assign(out: &mut Phonemized, text: &str) {
         && text[end..].chars().all(separator);
     if !valid {
         out.word_text_spans.clear();
+        out.phoneme_text_spans.clear();
         return;
     }
     let mut words: Vec<(usize, usize)> = Vec::new();

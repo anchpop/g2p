@@ -304,6 +304,47 @@ fn patch(
     Ok(forced)
 }
 
+/// Fix the tokenizer's words before anything reads them:
+/// * A word that starts with a small kana is the end of the previous word's
+///   last mora. The tokenizer splits unknown names there (エルフ + ァバ,
+///   ウルフ + ィー) and reads the small kana as a full vowel: エルフアバ.
+/// * The verb 言う is said ユー; spelled in kana, and often in kanji too
+///   (という, 言うこと), it gets the literal イウ.
+fn repair(njd: &mut NJD) {
+    const SMALL: &[char] = &[
+        'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ャ', 'ュ', 'ョ', 'ヮ', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'ゃ',
+        'ゅ', 'ょ', 'ゎ',
+    ];
+    let mut i = 1;
+    while i < njd.nodes.len() {
+        let (before, after) = njd.nodes.split_at_mut(i);
+        let (previous, node) = (before.last_mut().unwrap(), &after[0]);
+        let small = kana(node.get_string());
+        if node.get_string().starts_with(SMALL)
+            && small == kana(node.get_read().unwrap_or_default())
+        {
+            let pron = format!("{}{small}", previous.get_pron());
+            if let Ok(pron) = Pronunciation::parse(&pron, previous.get_pron().accent()) {
+                let read = format!("{}{small}", previous.get_read().unwrap_or_default());
+                previous.replace_string(&format!("{}{}", previous.get_string(), node.get_string()));
+                previous.set_read(&read);
+                previous.set_pron(pron);
+                njd.nodes.remove(i);
+                continue;
+            }
+        }
+        i += 1;
+    }
+    for node in &mut njd.nodes {
+        // Keyed on the surface: the tokenizer sometimes tags kana いう as
+        // an adjective (っていう弁護士), and no other word is spelled so.
+        if node.get_read() == Some("イウ") && matches!(node.get_string(), "いう" | "言う" | "云う")
+        {
+            node.set_pron(Pronunciation::parse("ユー", node.get_pron().accent()).unwrap());
+        }
+    }
+}
+
 /// The preprocessed NJD for `text`, agreeing with every reading, and whether
 /// that took a word the dictionary does not have.
 pub(super) fn resolve(
@@ -315,6 +356,7 @@ pub(super) fn resolve(
         .jp
         .text_to_njd(text)
         .map_err(|e| Error::Synth(format!("jpreprocess: {e}")))?;
+    repair(&mut njd);
     if readings.is_empty() {
         njd.preprocess();
         return Ok((njd, false));
@@ -410,6 +452,13 @@ mod tests {
     }
 
     #[test]
+    fn small_kana_and_kana_iu_are_repaired() {
+        // The tokenizer splits エルフ + ァ and reads the ァ as a full vowel.
+        assert_eq!(labels("エルファバ", &[]).0, "e ɾ ɯᵝ ɸ a b a");
+        assert_eq!(labels("そういう", &[]).0, "s o o j ɯᵝ ɯᵝ");
+    }
+
+    #[test]
     fn a_reading_the_dictionary_has_keeps_its_accent() {
         // Alone, 方 has no context; the caller says which word it is.
         assert_eq!(labels("方", &[]).0, "h o o");
@@ -445,9 +494,15 @@ mod tests {
                     }
                 })
                 .collect();
+            // Only the phones' source text may differ: the readings say
+            // which kanji each mora was read from.
+            let without_spans = |mut labels: super::super::Labels| {
+                labels.phoneme_text_spans.clear();
+                labels
+            };
             assert_eq!(
-                super::super::phonemize(text, &readings).unwrap(),
-                super::super::phonemize(text, &[]).unwrap()
+                without_spans(super::super::phonemize(text, &readings).unwrap()),
+                without_spans(super::super::phonemize(text, &[]).unwrap())
             );
         }
     }

@@ -217,11 +217,12 @@ fn source_artifacts_are_fixed_and_digits_are_preserved() {
         fa.phonemes.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
         ["q", "a", "h", "v", "eː"]
     );
+    // Final рь is a soft r, not r plus a vowel.
     let ru = phonemize_espeak("царь", "ru").unwrap();
-    assert_eq!(ru.raw, "tsˈɑrɪ");
+    assert_eq!(ru.raw, "tsˈɑrʲ");
     assert_eq!(
         ru.phonemes.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
-        ["ts", "ɑ", "r", "ɪ"]
+        ["ts", "ɑ", "rʲ"]
     );
     assert_eq!(g2p::parse::parse("q1 ɪ^").phonemes, ["q", "1", "ɪ"]);
 }
@@ -376,4 +377,92 @@ fn cantonese_and_vietnamese_tones_are_aligned_metadata() {
         assert!(result.raw.chars().any(|c| c.is_ascii_digit()));
         assert!(g2p::phonemize(language, "...").unwrap().tone.is_empty());
     }
+}
+
+/// Phones with ` | ` between words, for readable expectations.
+fn words(text: &str, voice: &str) -> String {
+    let p = phonemize_espeak(text, voice).unwrap();
+    p.word_spans
+        .iter()
+        .map(|&(start, end)| p.phonemes[start..end].join(" "))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+#[test]
+fn russian_softness_voicing_and_capitals() {
+    // Final soft consonants stay soft before a consonant or a pause.
+    assert_eq!(words("день", "ru"), "dʲ e nʲ");
+    // Final зь devoices like every other final voiced obstruent.
+    assert_eq!(words("связь", "ru"), "s vʲ ɑ sʲ");
+    // A proclitic assimilates to the voiced obstruent after it.
+    assert_eq!(words("с другом", "ru"), "z | d r u ɡ ʌ m");
+    // A whole final cluster voices, not just its first consonant.
+    assert_eq!(words("поезд до", "ru"), "p o j i z d | d o");
+    // Capitals are a word, and a lone ж is the particle же.
+    assert_eq!(words("НЕТ", "ru"), "nʲ e t");
+    assert_eq!(words("Твою ж.", "ru"), "t v ʌ j u | ʃ");
+}
+
+#[test]
+fn french_liaison_follows_the_word() {
+    // No liaison after a noun or a lexical verb; obligatory after a pronoun.
+    assert_eq!(words("lait est", "fr-fr"), "l ɛ | ɛ");
+    assert_eq!(words("choisissez un", "fr-fr"), "ʃ w a z i s e | œ̃");
+    assert_eq!(words("vous avez", "fr-fr"), "v u z | a v e");
+    assert_eq!(words("vos amis", "fr-fr"), "v o z | a m i");
+    // sont liaises after a noun subject too, not only after a pronoun.
+    assert_eq!(
+        words("les enfants sont en retard", "fr-fr"),
+        "l e z | ɑ̃ f ɑ̃ | s ɔ̃ t | ɑ̃ | ʁ ə t a ʁ"
+    );
+    // bon denasalises in liaison; mon does not.
+    assert_eq!(words("bon ami", "fr-fr"), "b ɔ n | a m i");
+    assert_eq!(words("mon ami", "fr-fr"), "m ɔ̃ n | a m i");
+    // Inversion always has its t; "en plus" is [plys].
+    assert_eq!(words("dort-il", "fr-fr"), "d ɔ ʁ t i l");
+    assert_eq!(words("en plus", "fr-fr"), "ɑ̃ | p l y s");
+    assert_eq!(words("vas-y", "fr-fr"), "v a z i");
+}
+
+#[test]
+fn german_devoicing_and_weg() {
+    // A pause before a $brk word ("als") no longer cancels final devoicing.
+    assert_eq!(
+        words("gesagt als getan", "de"),
+        "ɡ ə z ɑː k t | a l s | ɡ ə t ɑː n"
+    );
+    // Clause-initial capital Weg is the adverb; bewege is bewegen.
+    assert_eq!(words("Weg da!", "de"), "v ɛ k | d ɑː");
+    assert_eq!(words("Der Weg", "de"), "d ɛ ɾ | v eː k");
+    assert_eq!(words("bewege", "de"), "b ə v eː ɡ ə");
+    // Acronyms are spelled even as a whole clause.
+    assert_eq!(words("USA", "de"), "uː ɛ s ɑː");
+}
+
+#[test]
+fn spanish_nasals_abbreviations_and_capitals() {
+    // n assimilates by sound: [ŋ] before /k/ spelled c, [m] before m.
+    assert_eq!(words("un condón", "es"), "u ŋ | k o n d o n");
+    assert_eq!(words("son muchas", "es"), "s o m | m u tʃ a s");
+    // d after l is a stop.
+    assert_eq!(words("el dedo", "es"), "e l | d e ð o");
+    assert_eq!(words("Hola, sr.", "es"), "o l a | s e ɲ o ɾ");
+    assert_eq!(words("Vota NO.", "es"), "b o t a | n o");
+}
+
+#[test]
+fn portuguese_european_stress_and_letters() {
+    // Lexically stressed verbs and possessives do not reduce in Portugal.
+    assert_eq!(words("está", "pt"), "ɨ ʃ t a");
+    assert_eq!(words("o meu amigo", "pt"), "ʊ | m e w | ɐ m i ɡ ʊ");
+    // A lone capital D is the letter, not 500.
+    assert_eq!(words("bloco D.", "pt-br"), "b l ɔ k ʊ | d e");
+}
+
+#[test]
+fn acronyms_and_capital_words() {
+    assert_eq!(words("MIT", "it"), "ɛ m m e iː t i");
+    assert_eq!(words("YES", "en-us"), "j ɛ s");
+    assert_eq!(words("brochure", "en-us"), "b ɹ oʊ ʃ ʊɹ");
 }

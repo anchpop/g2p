@@ -35,6 +35,17 @@ import types
 from importlib.metadata import version
 
 
+FINALS = {chr(c) for c in range(0x11A8, 0x11C3)}
+
+# (first morpheme, mecab tag) of a word that takes ㄴ-insertion after a
+# consonant: 일 "matter", 입 "mouth", 잎, 엿, 이야기, and the verbs 잊다,
+# 읽다, 입다, 열다.
+NIEUN_INSERTION_ROOTS = {
+    ("일", "NNG"), ("입", "NNG"), ("잎", "NNG"), ("엿", "NNG"), ("이야기", "NNG"),
+    ("잊", "VV"), ("읽", "VV"), ("입", "VV"), ("열", "VV"),
+}
+
+
 def _stub_nltk() -> None:
     nltk = types.ModuleType("nltk")
     nltk.data = types.SimpleNamespace(find=lambda *a, **k: None)
@@ -72,17 +83,52 @@ class Phonemizer:
                     a, b = line.split("===")
                     self.idioms.append((a, b))
 
+    def nieun_insertions(self, text: str) -> set[int]:
+        """Indices of the words that take ㄴ-insertion across the preceding
+        word boundary (표준 발음법 29항 붙임 2): 할 일 [할릴], 무슨 일
+        [무슨닐], 못 잊어 [몬니저]. g2pk only inserts it inside its own
+        dictionary compounds. Across words it is lexical in speech (좀 이상해
+        links, [조미상해]), so only the native roots the standard's examples
+        use trigger it."""
+        tokens = self.g2p.mecab.pos(text)
+        words = text.split(" ")
+        if "".join(token for token, _ in tokens) != "".join(words):
+            return set()
+        starts, offset = {}, 0
+        for token, tag in tokens:
+            starts.setdefault(offset, (token, tag.split("+")[0]))
+            offset += len(token)
+        inserts, offset = set(), 0
+        for i, word in enumerate(words):
+            if i > 0 and word and words[i - 1] and self.h2j(words[i - 1][-1])[-1] in FINALS:
+                if starts.get(offset) in NIEUN_INSERTION_ROOTS:
+                    inserts.add(i)
+            offset += len(word)
+        return inserts
+
     def clause(self, words: list[str]) -> list[str]:
         """g2pk's steps 1 and 3–9 (English and number conversion skipped) on
         the clause as one string; the output keeps one token per word."""
         text = " ".join(words)
         for a, b in self.idioms:
             text = re.sub(a, b, text)
+        inserts = self.nieun_insertions(text)
         text = self.annotate(text, self.g2p.mecab)
-        inp = self.h2j(text)
+        inp = " ".join(
+            re.sub("^ᄋ", "ᄂ", word) if i in inserts else word
+            for i, word in enumerate(self.h2j(text).split(" "))
+        )
         for func in self.special:
             inp = func(inp, False, False)
         inp = re.sub("/[PJEB]", "", inp)
+        # ㄼ is ㄹ before a consonant (표준 발음법 10항: 여덟 마리 [여덜마리],
+        # 넓네 [널레]); only 밟- has ㅂ (밟는 [밤는]). The table nasalizes
+        # every ㄼ before ㅁ and ㄴ.
+        inp = re.sub("(?<!바)ᆲ( ?)ᄆ", r"ᆯ\1ᄆ", inp)
+        inp = re.sub("(?<!바)ᆲ( ?)ᄂ", r"ᆯ\1ᄅ", inp)
+        # A word starting with ㄹ is a loanword or name; after ㄴ it is [n],
+        # not lateral: 난 로웰 [난노웰], not [날로웰] (the 의견란 pattern).
+        inp = inp.replace("ᆫ ᄅ", "ᆫ ᄂ")
         for str1, str2, _ in self.g2p.table:
             inp = re.sub(str1, str2, inp)
         for func in self.link:

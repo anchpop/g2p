@@ -93,6 +93,15 @@ struct Response {
 }
 
 fn response(text: &str) -> Result<Response, Error> {
+    let flat: String = text
+        .chars()
+        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .collect();
+    ask(serde_json::json!({ "text": flat }))
+}
+
+/// One request to the server, and its reply.
+fn ask<T: serde::de::DeserializeOwned>(request: serde_json::Value) -> Result<T, Error> {
     let mut guard = SERVER_STATE.lock().unwrap_or_else(|p| p.into_inner());
     if guard.is_none() {
         *guard = Some(spawn());
@@ -101,11 +110,7 @@ fn response(text: &str) -> Result<Response, Error> {
         Ok(s) => s,
         Err(e) => return Err(Error::Backend(format!("thai: {e}"))),
     };
-    let flat: String = text
-        .chars()
-        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
-        .collect();
-    let request = serde_json::json!({ "text": flat }).to_string();
+    let request = request.to_string();
     let io_err = |e: std::io::Error| Error::Synth(format!("thai backend I/O: {e}"));
     server.stdin.write_all(request.as_bytes()).map_err(io_err)?;
     server.stdin.write_all(b"\n").map_err(io_err)?;
@@ -240,11 +245,13 @@ pub fn parse(raw: &str) -> Result<Labels, Error> {
     Ok(labels)
 }
 
-/// Label one utterance. Text with Latin letters is refused: vachana has no
-/// English or name path and mostly copies such spans through, and a
-/// one-letter abbreviation may or may not have a lexicon entry, so no
-/// mixed-script sentence is labeled.
-pub fn phonemize(text: &str) -> Result<Labels, Error> {
+/// Label one utterance: the caller's `words` (byte ranges of `text`, see
+/// [`crate::Hints::words`]) when given, else the words vachana's segmenter
+/// finds. Text with Latin letters is refused: vachana has no English or name
+/// path and mostly copies such spans through, and a one-letter abbreviation
+/// may or may not have a lexicon entry, so no mixed-script sentence is
+/// labeled.
+pub fn phonemize(text: &str, words: &[(usize, usize)]) -> Result<Labels, Error> {
     let latin: Vec<&str> = text
         .split(|c: char| !c.is_ascii_alphabetic())
         .filter(|w| !w.is_empty())
@@ -254,6 +261,9 @@ pub fn phonemize(text: &str) -> Result<Labels, Error> {
             "thai_mixed_latin_script:{}",
             latin.join(",")
         )));
+    }
+    if !words.is_empty() {
+        return phonemize_words(text, words);
     }
     let response = response(text)?;
     let mut out = parse(&response.ipa)?;
@@ -276,9 +286,53 @@ pub fn phonemize(text: &str) -> Result<Labels, Error> {
             phones.extend(word.phonemes);
         }
         if phones == out.phonemes && word_spans == out.word_spans {
-            out.word_text_spans = sources;
+            // The tokenizer can keep punctuation on a word (เหรอ?); it is
+            // not spoken, so it is not the word's source.
+            out.word_text_spans = sources
+                .into_iter()
+                .map(|span| crate::attribution::trim_separators(text, span))
+                .collect();
         }
     }
+    Ok(out)
+}
+
+/// vachana's pronunciation of each given word on its own, each phoneme
+/// spoken from its word.
+fn phonemize_words(text: &str, words: &[(usize, usize)]) -> Result<Labels, Error> {
+    #[derive(serde::Deserialize)]
+    struct Reply {
+        word_ipa: Vec<String>,
+    }
+    let surfaces: Vec<&str> = words
+        .iter()
+        .map(|&(start, end)| &text[start..end])
+        .collect();
+    let reply: Reply = ask(serde_json::json!({ "words": surfaces }))?;
+    if reply.word_ipa.len() != words.len() {
+        return Err(Error::Synth(
+            "thai backend: one IPA string per word expected".into(),
+        ));
+    }
+    let mut out = Labels::default();
+    let mut raw = Vec::new();
+    for (&span, ipa) in words.iter().zip(&reply.word_ipa) {
+        if ipa.trim().is_empty() {
+            continue;
+        }
+        let word = parse(ipa)?;
+        let base = out.phonemes.len();
+        let source = crate::attribution::trim_separators(text, span);
+        for (start, end) in word.word_spans {
+            out.word_spans.push((base + start, base + end));
+            out.word_text_spans.push(source);
+        }
+        out.phonemes.extend(word.phonemes);
+        out.tone.extend(word.tone);
+        out.stress.extend(word.stress);
+        raw.push(ipa.as_str());
+    }
+    out.raw = raw.join(" ");
     Ok(out)
 }
 
@@ -314,7 +368,7 @@ mod tests {
     #[test]
     fn refuses_mixed_script() {
         assert!(matches!(
-            phonemize("ผมใช้ AOL"),
+            phonemize("ผมใช้ AOL", &[]),
             Err(Error::Unlabelable(r)) if r.starts_with("thai_mixed_latin")
         ));
     }
@@ -322,7 +376,7 @@ mod tests {
     #[test]
     #[ignore = "needs uv on PATH and network on first run"]
     fn runs_the_python_backend() {
-        let l = phonemize("สวัสดีครับ").unwrap();
+        let l = phonemize("สวัสดีครับ", &[]).unwrap();
         assert_eq!(l.phonemes[..4], ["s", "a", "w", "a"]);
     }
 }

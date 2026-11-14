@@ -10,7 +10,8 @@ pub struct Labels {
     /// Tone class per phoneme: 1 mid, 2 low, 3 falling, 4 high, 5 rising on
     /// vowels (the tone-bearing phone of each syllable), `None` on consonants.
     pub tone: Vec<Option<u8>>,
-    /// `[start, end)` per word (vachana's space-separated tokens).
+    /// `[start, end)` per word (vachana's space-separated tokens, or the
+    /// pieces of the caller's words).
     pub word_spans: Vec<(usize, usize)>,
     /// Exact original-input byte ranges, or empty when normalization obscures them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

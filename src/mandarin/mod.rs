@@ -294,13 +294,31 @@ fn supplied(text: &str, readings: &[Reading]) -> Result<Vec<Option<String>>, Err
     Ok(out)
 }
 
+/// Which supplied reading each character index of `text` falls in. A reading
+/// is the only word boundary this backend knows.
+fn words(text: &str, readings: &[Reading]) -> Vec<Option<usize>> {
+    let mut out = vec![None; text.chars().count()];
+    for (word, reading) in readings.iter().enumerate() {
+        let first = text[..reading.start].chars().count();
+        let len = text[reading.start..reading.end].chars().count();
+        out[first..first + len].fill(Some(word));
+    }
+    out
+}
+
+fn tone_digit(reading: &str) -> Option<u8> {
+    reading.chars().last()?.to_digit(10).map(|t| t as u8)
+}
+
 /// One [`Syllable`] per Han character in `text`: the supplied reading where
 /// there is one, g2pM's otherwise. Punctuation and whitespace are skipped.
 /// Digits, Latin letters, and characters with neither a supplied reading nor
-/// a g2pM one are refused.
+/// a g2pM one are refused. Each reading's stretch is treated as one word by
+/// the tone sandhi.
 pub fn phonemize(text: &str, readings: &[Reading]) -> Result<Vec<Syllable>, Error> {
     let m = model();
     let mut supplied = supplied(text, readings)?;
+    let words = words(text, readings);
     let digits: String = text
         .chars()
         .filter(|c| c.is_ascii_digit() || ('０'..='９').contains(c))
@@ -359,13 +377,23 @@ pub fn phonemize(text: &str, readings: &[Reading]) -> Result<Vec<Syllable>, Erro
 
     let citation_tones: Vec<_> = readings
         .iter()
-        .map(|reading| {
-            reading
-                .as_ref()
-                .and_then(|r| r.chars().last()?.to_digit(10).map(|t| t as u8))
+        .map(|reading| reading.as_deref().and_then(tone_digit))
+        .collect();
+    // A neutral syllable still has its character's tone for the 一 and 不
+    // rules: 一个 is yí ge, because 个 is gè.
+    let lexical_tones: Vec<_> = citation_tones
+        .iter()
+        .zip(&chars)
+        .map(|(&tone, c)| match tone {
+            Some(5) => m
+                .cedict
+                .get(c)
+                .and_then(|prons| prons.iter().filter_map(|p| tone_digit(p)).find(|&t| t != 5))
+                .or(tone),
+            _ => tone,
         })
         .collect();
-    let surface_tones = sandhi(&chars, &citation_tones);
+    let surface_tones = sandhi(&chars, &citation_tones, &lexical_tones, &words);
     let mut out = Vec::new();
     for (i, reading) in readings.into_iter().enumerate() {
         let Some(reading) = reading else { continue };
@@ -435,24 +463,66 @@ pub fn phonemize(text: &str, readings: &[Reading]) -> Result<Vec<Syllable>, Erro
     Ok(out)
 }
 
-/// Realized tones, indexed by source character. Context always uses citation
-/// tones; punctuation other than sentence/clause breaks is transparent.
-fn sandhi(chars: &[char], citation: &[Option<u8>]) -> Vec<Option<u8>> {
+/// Words whose third tone rises before a neutral syllable that is lexically a
+/// third tone: 小姐 xiáojie. Most keep the low third (姐姐 jiějie, 耳朵,
+/// 椅子), so this is a word list, not a rule.
+const RISES_BEFORE_NEUTRAL: [[char; 2]; 1] = [['小', '姐']];
+
+/// Realized tones, indexed by source character. `lexical` is the tone the 一
+/// and 不 rules (and [`RISES_BEFORE_NEUTRAL`]) consult: the citation tone,
+/// except that a neutral syllable keeps its character's tone (个 gè). `words` gives the word each character
+/// belongs to where known (see [`words`]); characters in no word count as
+/// one unknown word, so without readings everything is one word.
+///
+/// Pauses block sandhi: clause punctuation, whitespace (subtitles mark clause
+/// breaks with spaces), ellipses, dashes and the enumeration comma. Other
+/// punctuation is transparent.
+///
+/// Third-tone sandhi is cyclic: inside a word it looks at the next syllable's
+/// citation tone, and across a word boundary at the next word's surface tone,
+/// so 小老鼠 is xiǎo láoshǔ, not xiáo láo shǔ.
+fn sandhi(
+    chars: &[char],
+    citation: &[Option<u8>],
+    lexical: &[Option<u8>],
+    words: &[Option<usize>],
+) -> Vec<Option<u8>> {
     assert_eq!(chars.len(), citation.len());
     let mut surface = citation.to_vec();
-    let numeral = |c: char| c.is_ascii_digit() || "〇零一二三四五六七八九十百千万亿".contains(c);
-    let mut next = None;
+    let digit = |c: char| c.is_ascii_digit() || "〇零一二三四五六七八九".contains(c);
+    let numeral = |c: char| digit(c) || "十百千万亿".contains(c);
+    let same_word = |a: usize, b: usize| words[a] == words[b];
+    // X不X and X一X with the same character on both sides: A-not-A questions
+    // (要不要) and verb reduplication (看一看), where 不 and 一 are neutral. The
+    // same 不 or 一 before X makes it a repeated word instead: 一个一个 is
+    // yí ge yí ge, 不错不错 bú cuò bú cuò. So does an X that ends a longer
+    // word: 现在 + 不在 is bú zài.
+    let reduplicated = |i: usize| {
+        i.checked_sub(1).is_some_and(|p| {
+            chars.get(i + 1) == Some(&chars[p])
+                && chars[p] != chars[i]
+                && citation[p].is_some()
+                && p.checked_sub(1).is_none_or(|pp| {
+                    chars[pp] != chars[i] && (words[p].is_none() || words[pp] != words[p])
+                })
+        })
+    };
+    let mut next: Option<usize> = None;
     for i in (0..chars.len()).rev() {
-        if "。！？，；：.!?,;:".contains(chars[i]) {
+        if chars[i].is_whitespace() || "。！？，；：.!?,;:…⋯—―～~、".contains(chars[i])
+        {
             next = None;
             continue;
         }
         let Some(tone) = citation[i] else { continue };
+        let next_lexical = next.and_then(|n| lexical[n]);
         // The 不 and 一 rules are about bù and yī. A supplied reading can be
         // another word written the same way: neutral in 对不起, fǒu for 不.
         surface[i] = Some(match chars[i] {
             '不' if tone == 4 => {
-                if next == Some(4) {
+                if reduplicated(i) {
+                    5
+                } else if next_lexical == Some(4) {
                     2
                 } else {
                     4
@@ -462,27 +532,45 @@ fn sandhi(chars: &[char], citation: &[Option<u8>]) -> Vec<Option<u8>> {
                 // Ordinal, counting and compound-final uses keep tone 1: 第一,
                 // 十一, 一二, weekdays (星期一 周一 礼拜一), months and dates
                 // (一月 一号 一日), and 一 closing a lexical compound (统一 唯一
-                // 万一 专一 同一 单一 划一 归一 之一 初一 合一 不一 如一).
+                // 万一 专一 同一 单一 划一 归一 之一 初一 合一). Except after 第,
+                // both characters must be in one word: 不一样 is bù yíyàng,
+                // 唯一一个 wéiyī yí ge.
                 let counting = i.checked_sub(1).is_some_and(|p| {
-                    "第期周拜统唯万专同单划归之初合不如".contains(chars[p]) || numeral(chars[p])
+                    chars[p] == '第'
+                        || (same_word(p, i)
+                            && (numeral(chars[p])
+                                || "期周拜统唯万专同单划归之初合".contains(chars[p])))
                 }) || chars
                     .get(i + 1)
                     .copied()
-                    .is_some_and(|n| "月号日".contains(n) || numeral(n));
-                if counting {
+                    .is_some_and(|n| "月号日".contains(n) || digit(n));
+                if reduplicated(i) {
+                    5
+                } else if counting {
                     1
                 } else {
-                    match next {
+                    match next_lexical {
                         Some(1..=3) => 4,
                         Some(4) => 2,
                         _ => 1,
                     }
                 }
             }
-            _ if tone == 3 && next == Some(3) => 2,
+            _ if tone == 3 => {
+                let next_tone = next.and_then(|n| {
+                    if !same_word(i, n) {
+                        surface[n]
+                    } else if RISES_BEFORE_NEUTRAL.contains(&[chars[i], chars[n]]) {
+                        lexical[n]
+                    } else {
+                        citation[n]
+                    }
+                });
+                if next_tone == Some(3) { 2 } else { 3 }
+            }
             _ => tone,
         });
-        next = Some(tone);
+        next = Some(i);
     }
     surface
 }
@@ -580,6 +668,92 @@ mod tests {
         }
     }
 
+    /// Sandhi with no neutral syllables and no known words.
+    fn sandhi(chars: &[char], citation: &[Option<u8>]) -> Vec<Option<u8>> {
+        super::sandhi(chars, citation, citation, &vec![None; chars.len()])
+    }
+
+    #[test]
+    fn neutral_classifiers_and_word_boundaries_steer_yi_and_bu() {
+        let chars = |text: &str| text.chars().collect::<Vec<_>>();
+        let t = |tones: &[u8]| tones.iter().map(|&t| Some(t)).collect::<Vec<_>>();
+        // 一个: 个 is neutral but lexically gè.
+        assert_eq!(
+            super::sandhi(&chars("一个"), &t(&[1, 5]), &t(&[1, 4]), &[None, None]),
+            t(&[2, 5])
+        );
+        // 一百 is yìbǎi: only digits make 一 a counting number.
+        assert_eq!(sandhi(&chars("一百"), &t(&[1, 3])), t(&[4, 3]));
+        // A compound-final 一 needs its partner in the same word.
+        let yiyang = (chars("不一样"), t(&[4, 1, 4]));
+        assert_eq!(sandhi(&yiyang.0, &yiyang.1), t(&[4, 2, 4]));
+        let simple = (chars("简单一些"), t(&[3, 1, 1, 1]));
+        assert_eq!(sandhi(&simple.0, &simple.1), t(&[3, 1, 1, 1]));
+        assert_eq!(
+            super::sandhi(
+                &simple.0,
+                &simple.1,
+                &simple.1,
+                &[Some(0), Some(0), Some(1), Some(1)]
+            ),
+            t(&[3, 1, 4, 1])
+        );
+        // A-not-A and verb reduplication are neutral; 一个一个 is a quantity.
+        assert_eq!(sandhi(&chars("要不要"), &t(&[4, 4, 4])), t(&[4, 5, 4]));
+        assert_eq!(sandhi(&chars("看一看"), &t(&[4, 1, 4])), t(&[4, 5, 4]));
+        assert_eq!(
+            super::sandhi(
+                &chars("一个一个"),
+                &t(&[1, 5, 1, 5]),
+                &t(&[1, 4, 1, 4]),
+                &[None; 4]
+            ),
+            t(&[2, 5, 2, 5])
+        );
+        // A repeated word is not A-not-A: 不错不错 is bú cuò bú cuò.
+        assert_eq!(
+            sandhi(&chars("不错不错"), &t(&[4, 4, 4, 4])),
+            t(&[2, 4, 2, 4])
+        );
+        // 第 makes an ordinal even as its own word; other partners must share
+        // 一's word, so 唯一 + 一个 is wéiyī yí ge.
+        let w = |ws: &[usize]| ws.iter().map(|&w| Some(w)).collect::<Vec<_>>();
+        let first = (chars("第一天"), t(&[4, 1, 1]));
+        assert_eq!(
+            super::sandhi(&first.0, &first.1, &first.1, &w(&[0, 1, 2])),
+            t(&[4, 1, 1])
+        );
+        let only = (chars("唯一一个"), t(&[2, 1, 1, 5]), t(&[2, 1, 1, 4]));
+        assert_eq!(
+            super::sandhi(&only.0, &only.1, &only.2, &w(&[0, 0, 1, 1])),
+            t(&[2, 1, 2, 5])
+        );
+        // X不X is not A-not-A when X ends a longer word: 现在 + 不在.
+        let now = (chars("现在不在"), t(&[4, 4, 4, 4]));
+        assert_eq!(
+            super::sandhi(&now.0, &now.1, &now.1, &w(&[0, 0, 1, 1])),
+            t(&[4, 4, 2, 4])
+        );
+        // 小姐 rises before its neutral 姐; 姐姐 keeps the low third.
+        let miss = (chars("小姐"), t(&[3, 5]), t(&[3, 3]));
+        assert_eq!(
+            super::sandhi(&miss.0, &miss.1, &miss.2, &[None, None]),
+            t(&[2, 5])
+        );
+        let sister = (chars("姐姐"), t(&[3, 5]), t(&[3, 3]));
+        assert_eq!(
+            super::sandhi(&sister.0, &sister.1, &sister.2, &[None, None]),
+            t(&[3, 5])
+        );
+        // Third tone is cyclic across words: 小 + 老鼠.
+        let mouse = (chars("小老鼠"), t(&[3, 3, 3]));
+        assert_eq!(sandhi(&mouse.0, &mouse.1), t(&[2, 2, 3]));
+        assert_eq!(
+            super::sandhi(&mouse.0, &mouse.1, &mouse.1, &[Some(0), Some(1), Some(1)]),
+            t(&[3, 2, 3])
+        );
+    }
+
     #[test]
     fn pure_surface_sandhi() {
         type Case<'a> = (&'a str, &'a [Option<u8>], &'a [Option<u8>]);
@@ -590,13 +764,20 @@ mod tests {
                 &[Some(3), Some(3), Some(3)],
                 &[Some(2), Some(2), Some(3)],
             ),
+            // Subtitles mark a clause break with a space; it is a pause.
             (
                 "你 好",
                 &[Some(3), None, Some(3)],
-                &[Some(2), None, Some(3)],
+                &[Some(3), None, Some(3)],
             ),
             (
-                "你、好",
+                "你……好",
+                &[Some(3), None, None, Some(3)],
+                &[Some(3), None, None, Some(3)],
+            ),
+            // Quotation marks are transparent.
+            (
+                "你“好",
                 &[Some(3), None, Some(3)],
                 &[Some(2), None, Some(3)],
             ),
@@ -648,7 +829,7 @@ mod tests {
             ),
             // Numeral checks are character-adjacent, not syllable-adjacent.
             (
-                "二 一天",
+                "二、一天",
                 &[Some(4), None, Some(1), Some(1)],
                 &[Some(4), None, Some(4), Some(1)],
             ),
@@ -666,7 +847,7 @@ mod tests {
                 "{text}"
             );
         }
-        for mark in "。！？，；：.!?,;:".chars() {
+        for mark in "。！？，；：.!?,;: …⋯—―～~、".chars() {
             for (first, tone) in [('你', 3), ('不', 4), ('一', 1)] {
                 assert_eq!(
                     sandhi(&[first, mark, '好'], &[Some(tone), None, Some(3)]),
@@ -674,11 +855,13 @@ mod tests {
                 );
             }
         }
-        for numeral in "〇零一二三四五六七八九十百千万亿0123456789".chars() {
+        for numeral in "〇零一二三四五六七八九0123456789".chars() {
             assert_eq!(
                 sandhi(&['一', numeral, '天'], &[Some(1), None, Some(4)]),
                 [Some(1), None, Some(4)]
             );
+        }
+        for numeral in "〇零一二三四五六七八九十百千万亿0123456789".chars() {
             assert_eq!(
                 sandhi(&[numeral, '一', '天'], &[None, Some(1), Some(1)]),
                 [None, Some(1), Some(1)]

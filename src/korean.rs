@@ -291,12 +291,13 @@ fn coda(index: usize) -> Option<&'static str> {
     })
 }
 
-/// Phones of one word's post-sandhi Hangul. `after_l` says whether the
-/// previous word in the clause ended in ㄹ, so a clause like 설날 written as
-/// two words still gets the geminate lateral.
-fn word_phones(pron: &str, mut after_l: bool) -> Result<(Vec<String>, bool), Error> {
-    let mut out: Vec<String> = Vec::new();
-    for c in pron.chars() {
+/// Phones of one word's post-sandhi Hangul, each with the index of the
+/// syllable it was read from. `after_l` says whether the previous word in the
+/// clause ended in ㄹ, so a clause like 설날 written as two words still gets
+/// the geminate lateral.
+fn word_phones(pron: &str, mut after_l: bool) -> Result<(Vec<(String, usize)>, bool), Error> {
+    let mut out: Vec<(String, usize)> = Vec::new();
+    for (syllable, c) in pron.chars().enumerate() {
         if !is_hangul_syllable(c) {
             return Err(Error::Synth(format!(
                 "korean backend returned a non-syllable {c:?} in {pron:?}"
@@ -311,16 +312,17 @@ fn word_phones(pron: &str, mut after_l: bool) -> Result<(Vec<String>, bool), Err
         let onset = ONSETS[l];
         if !onset.is_empty() {
             // ㄹ after coda ㄹ is the geminate lateral, not a tap.
-            out.push(if onset == "ɾ" && after_l { "l" } else { onset }.to_string());
+            let onset = if onset == "ɾ" && after_l { "l" } else { onset };
+            out.push((onset.to_string(), syllable));
         }
-        out.extend(VOWELS[v].iter().map(|p| p.to_string()));
+        out.extend(VOWELS[v].iter().map(|p| (p.to_string(), syllable)));
         let coda = coda(t).ok_or_else(|| {
             Error::Synth(format!(
                 "korean backend left an unneutralized coda in {pron:?}"
             ))
         })?;
         if !coda.is_empty() {
-            out.push(coda.to_string());
+            out.push((coda.to_string(), syllable));
         }
         after_l = coda == "l";
     }
@@ -329,6 +331,13 @@ fn word_phones(pron: &str, mut after_l: bool) -> Result<(Vec<String>, bool), Err
 
 /// Labels from the clauses' pronunciations.
 pub fn labels(prons: &[Vec<String>]) -> Result<Labels, Error> {
+    Ok(labels_with_syllables(prons)?.0)
+}
+
+/// [`labels`], and parallel to its phonemes the index of the syllable each
+/// was read from within its word.
+fn labels_with_syllables(prons: &[Vec<String>]) -> Result<(Labels, Vec<usize>), Error> {
+    let mut syllables = Vec::new();
     let mut labels = Labels {
         raw: prons
             .iter()
@@ -343,12 +352,15 @@ pub fn labels(prons: &[Vec<String>]) -> Result<Labels, Error> {
             let start = labels.phonemes.len();
             let (phones, ends_in_l) = word_phones(pron, after_l)?;
             after_l = ends_in_l;
-            labels.phonemes.extend(phones);
+            for (phone, syllable) in phones {
+                labels.phonemes.push(phone);
+                syllables.push(syllable);
+            }
             labels.word_spans.push((start, labels.phonemes.len()));
         }
     }
     labels.stress = vec![crate::Stress::None; labels.phonemes.len()];
-    Ok(labels)
+    Ok((labels, syllables))
 }
 
 /// Label one utterance.
@@ -357,10 +369,50 @@ pub fn phonemize(text: &str) -> Result<Labels, Error> {
     if clauses.is_empty() {
         return Ok(Labels::default());
     }
-    let mut out = labels(&pronunciations(&clauses)?)?;
+    let prons = pronunciations(&clauses)?;
+    let (mut out, syllables) = labels_with_syllables(&prons)?;
     out.word_text_spans =
         crate::attribution::align(text, clauses.iter().flatten().map(String::as_str));
+    out.phoneme_text_spans = syllable_spans(text, &out, &prons, &syllables);
     Ok(out)
+}
+
+/// Each phone's source syllable. The sound changes rewrite jamo inside
+/// syllables and never add or remove one, so pronounced syllable i was read
+/// from written syllable i: 값이 [갑씨] gives 값 `k a p` and 이 `s͈ i` (a coda
+/// that moves to the next onset belongs to the syllable it is pronounced
+/// in). A word whose pronunciation has another syllable count (a g2pk idiom
+/// rewrite) keeps the whole word's range on each of its phones.
+fn syllable_spans(
+    text: &str,
+    labels: &Labels,
+    prons: &[Vec<String>],
+    syllables: &[usize],
+) -> Vec<(usize, usize)> {
+    let mut spans = Vec::with_capacity(labels.phonemes.len());
+    for ((&(start, end), &(word_start, word_end)), pron) in labels
+        .word_spans
+        .iter()
+        .zip(&labels.word_text_spans)
+        .zip(prons.iter().flatten())
+    {
+        let written: Vec<(usize, usize)> = text[word_start..word_end]
+            .char_indices()
+            .map(|(i, c)| (word_start + i, word_start + i + c.len_utf8()))
+            .collect();
+        let one_to_one = written.len() == pron.chars().count();
+        spans.extend(syllables[start..end].iter().map(|&syllable| {
+            if one_to_one {
+                written[syllable]
+            } else {
+                (word_start, word_end)
+            }
+        }));
+    }
+    if spans.len() != labels.phonemes.len() {
+        spans.clear();
+    }
+    spans
 }
 
 #[cfg(test)]
@@ -388,7 +440,14 @@ mod tests {
 
     #[test]
     fn tap_between_vowels_lateral_in_coda_and_across_words() {
-        let phones = |s: &str| word_phones(s, false).unwrap().0;
+        let phones = |s: &str| -> Vec<String> {
+            word_phones(s, false)
+                .unwrap()
+                .0
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect()
+        };
         assert_eq!(phones("라디오"), ["ɾ", "a", "t", "i", "o"]);
         assert_eq!(phones("물"), ["m", "u", "l"]);
         assert_eq!(phones("설랄"), ["s", "ʌ", "l", "l", "a", "l"]);
@@ -396,6 +455,27 @@ mod tests {
         // second word is the geminate's second half.
         let l = labels(&[words("잘 래다")]).unwrap();
         assert_eq!(l.phonemes, ["tɕ", "a", "l", "l", "e", "t", "a"]);
+    }
+
+    #[test]
+    fn phones_keep_the_syllable_they_are_pronounced_in() {
+        let spans = |text: &str, prons: &[Vec<String>]| -> Vec<String> {
+            let (mut l, syllables) = labels_with_syllables(prons).unwrap();
+            l.word_text_spans = crate::attribution::align(text, text.split(' '));
+            let mut out: Vec<String> = syllable_spans(text, &l, prons, &syllables)
+                .into_iter()
+                .map(|(s, e)| text[s..e].to_string())
+                .collect();
+            out.dedup();
+            out
+        };
+        // 값이 [갑씨]: the ㅅ that moves into the next onset belongs to 이.
+        assert_eq!(
+            spans("값이 좋아", &[words("갑씨 조아")]),
+            ["값", "이", "좋", "아"]
+        );
+        // A rewrite that changes the syllable count keeps the whole word.
+        assert_eq!(spans("값이", &[words("갑")]), ["값이"]);
     }
 
     #[test]
@@ -442,5 +522,8 @@ mod tests {
         // 몬 만나써); the comma blocks it (라디오 keeps its ㄹ).
         let l = phonemize("할 것을 못 만났어, 라디오!").unwrap();
         assert_eq!(l.raw, "할 꺼슬 몬 만나써 | 라디오");
+        // ㄴ-insertion across words, ㄼ before a consonant, ㄴ before a name.
+        let l = phonemize("할 일, 못 잊어, 여덟 마리, 난 로웰").unwrap();
+        assert_eq!(l.raw, "할 릴 | 몬 니저 | 여덜 마리 | 난 노웰");
     }
 }

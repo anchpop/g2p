@@ -26,6 +26,21 @@ no `ESPEAK_NG_DATA_PATH`, no way to run against mainline espeak by mistake.
   an utterance cannot be attributed confidently, this entire field is empty;
   pronunciation and prosody are still returned. Constructors without source text
   leave it empty, and old serialized results deserialize with an empty field.
+- `phoneme_text_spans` — the same, per phoneme: the text each phoneme was
+  spoken from, within its word's span, so a word can be split between the
+  pieces of text inside it. espeak: the letters of the rule match, prefix,
+  suffix or spelled letter that produced it (c'est → `s`<c> `ɛ`<est>,
+  Hausaufgabe → Haus|auf|gabe), the whole word for a dictionary entry, and
+  each word of a dictionary phrase that spells a `||` (word boundary) or
+  `||+` (source break only, the phrase stays one phonological word) per word
+  ("in the", "en plus", "не было"; phrases without one still own all their
+  words). Japanese: the
+  kana of its mora, or the kanji its mora was read from (by the supplied
+  readings; a lone kanji run without one takes the moras left over), else
+  the NJD node. Korean: the syllable it is pronounced in (값이 [갑씨] gives
+  `s͈` to 이). Mandarin: the character. Hindi and Thai: the word. A long
+  consonant joined from two sources (Japanese っ, Italian geminates) spans
+  both. Empty whenever `word_text_spans` is.
 
 Attribution follows the backend's actual units: Hindi source runs, Mandarin
 characters, Japanese NJD nodes, Korean eojeol, and Thai segmented surfaces.
@@ -226,6 +241,18 @@ runs in Rust. **Needs `uv` on PATH**; the first call resolves the
 environment. Mixed Thai/Latin text is refused. The pins are part of
 `identity()`.
 
+pythainlp's dictionary segmenter joins words its dictionary lists as one
+(ได้มา, ที่จะ, ดีแล้ว), takes lookalikes (มา + นะ as มานะ "perseverance") and
+sometimes splits wrongly (แล้ว จะ as แล้ | วจะ). A caller that knows the words
+passes them as `Hints { words, .. }` (byte ranges of the text): vachana then
+converts each word on its own (same text preparation, its dictionary, else
+TLTK), each word's phonemes are spoken from it, and stress falls on each
+given word's final syllable. An unknown word that TLTK transcribes only in
+part (ดีพโรส as ดี alone) is read as the segmenter would split it, so no
+syllable is dropped. Pass lexical words, not multi-word chunks: those miss
+the dictionary and go to TLTK, which is slow and less accurate. Without
+words the result is unchanged.
+
 ### Japanese
 
 espeak's `ja` voice is not used. `src/japanese` runs OpenJTalk's text front
@@ -264,9 +291,10 @@ dictionary is refused rather than labeled with a hole.
 
 Both languages guess the pronunciation of ambiguous text from context, and a
 caller often knows better: it shows the learner a reading, or the text is one
-word with no context at all (方: かた or ほう?). `phonemize_with_readings`
-takes `Reading { start, end, reading }` items over byte ranges of the text
-and returns labels that agree with every one of them, or an error. Text
+word with no context at all (方: かた or ほう?). `phonemize_with` takes
+`Hints { readings, .. }`: `Reading { start, end, reading }` items over byte
+ranges of the text, and returns labels that agree with every one of them, or
+an error. Text
 outside the readings is predicted as before, and with no readings the result
 is exactly `phonemize`'s.
 

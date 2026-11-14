@@ -60,7 +60,7 @@ unsafe extern "C" {
     // Formats the current post-pitch/length list without retranslating it.
     pub fn GetTranslatedPhonemeStringWithSource(
         phoneme_mode: c_int,
-        sink: unsafe extern "C" fn(c_int, c_int, c_int),
+        sink: unsafe extern "C" fn(c_int, c_int, c_int, c_int, c_int),
     ) -> *const c_char;
     pub fn espeak_ng_SetVoiceByName(name: *const c_char) -> Status;
     pub fn espeak_ng_SetVoiceByProperties(voice_selector: *mut espeak_VOICE) -> Status;

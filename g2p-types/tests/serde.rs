@@ -71,6 +71,7 @@ fn all_shared_labels_roundtrip_without_engines() {
         stress: vec![Stress::Primary],
         word_spans: vec![(0, 1)],
         word_text_spans: vec![(0, 1)],
+        phoneme_text_spans: vec![(0, 1)],
         syllables: vec![syllable.clone()],
         tone: vec![Some(1)],
         pitch: vec![Some(pitch.clone())],
@@ -97,6 +98,7 @@ fn all_shared_labels_roundtrip_without_engines() {
     roundtrip(g2p_types::japanese::Labels {
         word_spans: vec![(0, 1)],
         word_text_spans: vec![(0, 3)],
+        phoneme_text_spans: vec![(0, 3)],
         phonemes: vec!["a".parse().unwrap()],
         pitch: vec![Some(pitch)],
         accent_withheld: None,
@@ -116,6 +118,7 @@ fn all_shared_labels_roundtrip_without_engines() {
         stress: vec![Stress::None; 2],
         word_spans: vec![(0, 2)],
         word_text_spans: vec![(0, 3)],
+        phoneme_text_spans: vec![(0, 3); 2],
     });
 }
 

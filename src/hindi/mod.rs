@@ -656,7 +656,8 @@ pub fn word(word: &str) -> Result<Word, Error> {
 }
 
 /// Label every Devanagari word in `text` (maximal runs of the Devanagari
-/// block, as lexide splits them). Words that produce no phonemes are dropped.
+/// block other than the dandas, as lexide splits them). Words that produce
+/// no phonemes are dropped.
 ///
 /// Digits or Latin letters are refused rather than leaving holes in the labels.
 pub fn phonemize(text: &str) -> Result<Vec<Word>, Error> {
@@ -678,8 +679,13 @@ pub fn phonemize(text: &str) -> Result<Vec<Word>, Error> {
         )));
     }
     let mut words = Vec::new();
+    // The dandas ।॥ are in the Devanagari block but are punctuation, not
+    // part of the word before them.
     for run in text
-        .split(|c: char| !in_devanagari_block(c) && !matches!(c, '\u{200c}' | '\u{200d}'))
+        .split(|c: char| {
+            (!in_devanagari_block(c) && !matches!(c, '\u{200c}' | '\u{200d}'))
+                || matches!(c, '।' | '॥')
+        })
         .filter(|w| !w.is_empty())
     {
         let mut w = word(run)?;

@@ -92,7 +92,7 @@ fn marker_len(s: &[char]) -> Option<usize> {
 /// Use [`crate::phonemize`] for current model labels: it also reads the
 /// engine's phoneme boundaries, which cannot be recovered from raw IPA.
 pub fn parse(raw: &str) -> Parsed {
-    parse_impl(raw, None, &mut Vec::new())
+    parse_impl(raw, None).0
 }
 
 /// Private trace separator (not a word boundary). The renderer suppresses
@@ -104,11 +104,13 @@ pub(crate) fn parse_framed(raw: &str, language: &str) -> Parsed {
     parse_framed_with_offsets(raw, language).0
 }
 
-/// Rendered byte offset of the first phone of each parsed word. Captured in
-/// the parser itself, including dropped empty words and phone-unit merges.
-pub(crate) fn parse_framed_with_offsets(raw: &str, language: &str) -> (Parsed, Vec<usize>) {
-    let mut offsets = Vec::new();
-    let mut parsed = parse_impl(raw, Some(language), &mut offsets);
+/// Also returns, parallel to the phonemes, the rendered byte offsets of each
+/// phoneme's first and last piece (they differ where phone units merged).
+pub(crate) fn parse_framed_with_offsets(
+    raw: &str,
+    language: &str,
+) -> (Parsed, Vec<(usize, usize)>) {
+    let (mut parsed, offsets) = parse_impl(raw, Some(language));
     // Use the requested language even for eSpeak's code-switched loanwords.
     // These replacements are one-to-one, preserving every aligned field.
     for phone in &mut parsed.phonemes {
@@ -140,15 +142,20 @@ struct Origin {
     // Stress and language switches are barriers even for cross-phone merges.
     barrier: usize,
     language: String,
+    /// Rendered byte offset of the token's first character.
+    offset: usize,
 }
 
-fn parse_impl(raw: &str, language: Option<&str>, word_offsets: &mut Vec<usize>) -> Parsed {
+/// The parse, and for framed input each phoneme's rendered offsets (see
+/// [`parse_framed_with_offsets`]).
+fn parse_impl(raw: &str, language: Option<&str>) -> (Parsed, Vec<(usize, usize)>) {
     let framed = language.is_some();
     let default_language = language.unwrap_or("").to_ascii_lowercase();
     let mut origin = Origin {
         phone: 0,
         barrier: 0,
         language: default_language.clone(),
+        offset: 0,
     };
     let mut origins = Vec::new();
     let (byte_offsets, chars): (Vec<_>, Vec<_>) = raw.char_indices().unzip();
@@ -254,16 +261,18 @@ fn parse_impl(raw: &str, language: Option<&str>, word_offsets: &mut Vec<usize>) 
             p.stress.push(Stress::None);
         }
         if p.phonemes.len() > before {
-            if before == word_start {
-                word_offsets.push(byte_offsets[i - 1]);
-            }
+            origin.offset = byte_offsets[i - 1];
             origins.push(origin.clone());
         }
     }
     if p.phonemes.len() > word_start {
         p.word_spans.push((word_start, p.phonemes.len()));
     }
-    if framed { merge_units(p, &origins) } else { p }
+    if framed {
+        merge_units(p, &origins)
+    } else {
+        (p, Vec::new())
+    }
 }
 
 fn english(language: &str) -> bool {
@@ -310,8 +319,9 @@ fn affricate(left: &str, right: &str) -> bool {
     )
 }
 
-fn merge_units(p: Parsed, origins: &[Origin]) -> Parsed {
+fn merge_units(p: Parsed, origins: &[Origin]) -> (Parsed, Vec<(usize, usize)>) {
     let mut out = Parsed::default();
+    let mut offsets = Vec::new();
     for (start, end) in p.word_spans {
         let word_start = out.phonemes.len();
         let mut i = start;
@@ -351,11 +361,12 @@ fn merge_units(p: Parsed, origins: &[Origin]) -> Parsed {
             }
             out.phonemes.push(unit);
             out.stress.push(p.stress[i]);
+            offsets.push((origins[i].offset, origins[i + count - 1].offset));
             i += count;
         }
         out.word_spans.push((word_start, out.phonemes.len()));
     }
-    out
+    (out, offsets)
 }
 
 #[cfg(test)]

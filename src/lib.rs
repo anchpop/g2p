@@ -128,18 +128,33 @@ fn phonemize_espeak(text: &str, voice: &str) -> Result<Phonemized, Error> {
         .map(|(i, _)| i)
         .chain([text.len()])
         .collect();
+    let bytes = |(start, len): (i32, i32)| {
+        if start < 0 || len <= 0 {
+            return None;
+        }
+        Some((
+            *boundaries.get(start as usize)?,
+            *boundaries.get((start + len) as usize)?,
+        ))
+    };
+    // The (word, letters) source of the engine phone whose rendering
+    // contains `offset`.
+    let source = |offset: usize| {
+        let index = trace.sources.partition_point(|s| s.offset <= offset);
+        let s = trace.sources.get(index.checked_sub(1)?)?;
+        Some(Source {
+            word: bytes(s.word)?,
+            letters: bytes(s.letters)?,
+        })
+    };
     let sources = offsets
         .into_iter()
-        .map(|offset| {
-            let index = trace.sources.partition_point(|&(at, _, _)| at <= offset);
-            let &(_, start, len) = trace.sources.get(index.checked_sub(1)?)?;
-            if start < 0 || len <= 0 {
-                return None;
-            }
-            Some((
-                *boundaries.get(start as usize)?,
-                *boundaries.get((start + len) as usize)?,
-            ))
+        .map(|(first, last)| {
+            let (first, last) = (source(first)?, source(last)?);
+            Some(Source {
+                word: union(first.word, last.word),
+                letters: union(first.letters, last.letters),
+            })
         })
         .collect::<Vec<_>>();
     espeak_phonemized(
@@ -150,19 +165,34 @@ fn phonemize_espeak(text: &str, voice: &str) -> Result<Phonemized, Error> {
     )
 }
 
+fn union(a: (usize, usize), b: (usize, usize)) -> (usize, usize) {
+    (a.0.min(b.0), a.1.max(b.1))
+}
+
+/// A phoneme's original-input byte ranges: its source word, and the letters
+/// of that word it was spoken from.
+#[derive(Clone, Copy)]
+struct Source {
+    word: (usize, usize),
+    letters: (usize, usize),
+}
+
+/// `sources` is parallel to `parsed.phonemes`. A word's text span is the union
+/// of its phonemes' source words, unknown if any of them is.
 fn espeak_phonemized(
     raw: String,
     parsed: Parsed,
     has_tones: bool,
-    sources: &[Option<(usize, usize)>],
+    sources: &[Option<Source>],
 ) -> Result<Phonemized, Error> {
     let mut out = Phonemized {
         raw,
         ..Phonemized::default()
     };
-    for (word, (start, end)) in parsed.word_spans.into_iter().enumerate() {
+    for (start, end) in parsed.word_spans {
         let word_start = out.phonemes.len();
-        for i in start..end {
+        let mut word_source = Some((usize::MAX, 0));
+        for (i, &source) in (start..end).zip(&sources[start..end]) {
             let phone = &parsed.phonemes[i];
             if has_tones && matches!(phone.as_str(), "1" | "2" | "3" | "4" | "5" | "6" | "7") {
                 // eSpeak's WritePhMnemonic appends tone_ph directly to its
@@ -179,11 +209,16 @@ fn espeak_phonemized(
                 if has_tones {
                     out.tone.push(None);
                 }
+                out.phoneme_text_spans
+                    .push(source.map(|s| s.letters).unwrap_or_default());
+                word_source = word_source
+                    .zip(source)
+                    .map(|(word, phone)| union(word, phone.word));
             }
         }
         if out.phonemes.len() > word_start {
             out.word_spans.push((word_start, out.phonemes.len()));
-            out.word_text_spans.push(sources[word].unwrap_or_default());
+            out.word_text_spans.push(word_source.unwrap_or_default());
         }
     }
     Ok(out)
@@ -210,12 +245,12 @@ fn phonemize_espeak_traces(text: &str, voice: &str) -> Result<(Clause, String), 
             trace.framed.push(' ');
         }
         let base = trace.framed.len();
-        trace.sources.extend(
-            clause
-                .sources
-                .into_iter()
-                .map(|(at, start, len)| (base + at, start, len)),
-        );
+        trace
+            .sources
+            .extend(clause.sources.into_iter().map(|source| PhoneSource {
+                offset: base + source.offset,
+                ..source
+            }));
         trace.framed.push_str(&clause.framed);
         trace.raw.push_str(&clause.raw);
         trace.raw.push(' ');
@@ -256,18 +291,30 @@ pub fn phonemize_lang(lang: &str, text: &str) -> Result<Phonemized, Error> {
 /// The shared enum only represents supported combinations; no separate
 /// variety or backend selection is needed.
 pub fn phonemize(language: Language, text: &str) -> Result<Phonemized, Error> {
-    phonemize_with_readings(language, text, &[])
+    phonemize_with(language, text, &Hints::default())
 }
 
-/// [`phonemize`], except that each [`Reading`] is pronounced as given rather
-/// than predicted: the result agrees with every reading or is an error.
-/// Japanese and Simplified Mandarin only; elsewhere the spelling already
-/// determines the pronunciation, so a reading is refused.
-pub fn phonemize_with_readings(
-    language: Language,
-    text: &str,
-    readings: &[Reading],
-) -> Result<Phonemized, Error> {
+/// What the caller already knows about the text, for [`phonemize_with`].
+/// A language that cannot use a kind of hint refuses it rather than ignore it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Hints<'a> {
+    /// Pronunciations to use rather than predict: the result agrees with
+    /// every reading or is an error. Japanese and Simplified Mandarin only;
+    /// elsewhere the spelling already determines the pronunciation.
+    pub readings: &'a [Reading],
+    /// The text's words, as `[start, end)` byte ranges in order, not
+    /// overlapping; text between them must be unspoken (whitespace,
+    /// punctuation). A range may be punctuation alone, which says nothing.
+    /// Each word is phonemized on its own, instead of the backend segmenting
+    /// the text itself, and its phonemes are spoken from it. Thai only, whose
+    /// unspaced script otherwise goes through a dictionary segmenter that
+    /// joins words (ได้มา) and confuses lookalikes (มา + นะ as มานะ).
+    pub words: &'a [(usize, usize)],
+}
+
+/// [`phonemize`], using what [`Hints`] say about the text.
+pub fn phonemize_with(language: Language, text: &str, hints: &Hints) -> Result<Phonemized, Error> {
+    let Hints { readings, words } = *hints;
     let lang = language.code();
     let source = label_source(lang).ok_or_else(|| Error::UnsupportedLanguage(lang.to_string()))?;
     // English corpus records can contain Korean instructional speech. Do not
@@ -299,6 +346,12 @@ pub fn phonemize_with_readings(
     if !readings.is_empty() && !matches!(source, LabelSource::Mandarin | LabelSource::Japanese) {
         return Err(Error::Unlabelable(format!("readings_unsupported:{lang}")));
     }
+    if !words.is_empty() {
+        if !matches!(source, LabelSource::Thai) {
+            return Err(Error::Unlabelable(format!("words_unsupported:{lang}")));
+        }
+        check_words(text, words)?;
+    }
 
     let mut result = match source {
         LabelSource::Espeak => phonemize_espeak(text, engine_voice(language)),
@@ -308,12 +361,32 @@ pub fn phonemize_with_readings(
         LabelSource::Japanese => japanese_phonemized(japanese::phonemize(text, readings)?),
         #[cfg(not(feature = "japanese"))]
         LabelSource::Japanese => Err(Error::UnsupportedLanguage(lang.to_string())),
-        LabelSource::Thai => thai_phonemized(thai::phonemize(text)?),
+        LabelSource::Thai => thai_phonemized(thai::phonemize(text, words)?),
         LabelSource::Korean => korean_phonemized(korean::phonemize(text)?),
     }?;
     geminate::merge(&mut result);
     attribution::assign(&mut result, text);
     Ok(result)
+}
+
+/// [`Hints::words`] must tile the spoken text: in order, on character
+/// boundaries, with only unspoken text between them.
+fn check_words(text: &str, words: &[(usize, usize)]) -> Result<(), Error> {
+    let mut end = 0;
+    for &(start, stop) in words {
+        let gap = text.get(end..start);
+        if start >= stop
+            || text.get(start..stop).is_none()
+            || !gap.is_some_and(|gap| gap.chars().all(attribution::separator))
+        {
+            return Err(Error::Unlabelable(format!("words_invalid:{start}..{stop}")));
+        }
+        end = stop;
+    }
+    if !text[end..].chars().all(attribution::separator) {
+        return Err(Error::Unlabelable(format!("words_invalid:{end}..")));
+    }
+    Ok(())
 }
 
 fn engine_voice(language: Language) -> &'static str {
@@ -337,13 +410,14 @@ fn korean_phonemized(labels: korean::Labels) -> Result<Phonemized, Error> {
         stress: labels.stress,
         word_spans: labels.word_spans,
         word_text_spans: labels.word_text_spans,
+        phoneme_text_spans: labels.phoneme_text_spans,
         ..Phonemized::default()
     })
 }
 
 /// Thai labels in the common shape.
 fn thai_phonemized(labels: thai::Labels) -> Result<Phonemized, Error> {
-    Ok(Phonemized {
+    let mut out = Phonemized {
         raw: labels.raw,
         phonemes: labels
             .phonemes
@@ -355,7 +429,10 @@ fn thai_phonemized(labels: thai::Labels) -> Result<Phonemized, Error> {
         word_text_spans: labels.word_text_spans,
         tone: labels.tone,
         ..Phonemized::default()
-    })
+    };
+    // Each phoneme was spoken from its segmented word.
+    out.phoneme_text_spans = word_level_phoneme_spans(&out);
+    Ok(out)
 }
 
 /// Japanese NJD-node word boundaries, pitch factors, and native phone trace.
@@ -371,6 +448,7 @@ fn japanese_phonemized(labels: japanese::Labels) -> Result<Phonemized, Error> {
             labels.word_spans
         },
         word_text_spans: labels.word_text_spans,
+        phoneme_text_spans: labels.phoneme_text_spans,
         phonemes: labels
             .phonemes
             .iter()
@@ -409,10 +487,22 @@ fn mandarin_phonemized(
         pinyin.push(s.pinyin);
     }
     out.raw = pinyin.join(" ");
+    // Each phoneme was spoken from its syllable's character.
+    out.phoneme_text_spans = word_level_phoneme_spans(&out);
     Ok(out)
 }
 
 /// Flatten per-word Hindi labels into the common shape.
+/// Every phoneme gets its word's text span, for backends whose words are the
+/// finest source unit they know.
+fn word_level_phoneme_spans(out: &Phonemized) -> Vec<(usize, usize)> {
+    out.word_text_spans
+        .iter()
+        .zip(&out.word_spans)
+        .flat_map(|(&text, &(start, end))| std::iter::repeat_n(text, end - start))
+        .collect()
+}
+
 fn hindi_phonemized(words: Vec<hindi::Word>) -> Result<Phonemized, Error> {
     let mut out = Phonemized::default();
     let mut raw_words = Vec::with_capacity(words.len());
@@ -436,6 +526,8 @@ fn hindi_phonemized(words: Vec<hindi::Word>) -> Result<Phonemized, Error> {
         out.stress.extend(w.stress);
         out.word_spans.push((start, out.phonemes.len()));
     }
+    // Each phoneme was spoken from its word.
+    out.phoneme_text_spans = word_level_phoneme_spans(&out);
     out.raw = raw_words.join(" ");
     Ok(out)
 }
@@ -451,17 +543,39 @@ static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
 struct Clause {
     raw: String,
     framed: String,
-    // Rendered byte offset, absolute source character index, source length.
-    sources: Vec<(usize, i32, i32)>,
+    sources: Vec<PhoneSource>,
+}
+
+/// Where one rendered engine phone came from, as (absolute source character
+/// index, length) pairs: its word, and the letters of that word it was spoken
+/// from (the whole word when the engine does not know them).
+#[derive(Clone, Copy)]
+struct PhoneSource {
+    /// Rendered byte offset of the phone.
+    offset: usize,
+    word: (i32, i32),
+    letters: (i32, i32),
 }
 
 thread_local! {
     static CLAUSES: RefCell<Vec<Clause>> = const { RefCell::new(Vec::new()) };
-    static WORD_SOURCES: RefCell<Vec<(usize, i32, i32)>> = const { RefCell::new(Vec::new()) };
+    static PHONE_SOURCES: RefCell<Vec<PhoneSource>> = const { RefCell::new(Vec::new()) };
 }
 
-unsafe extern "C" fn collect_word_source(offset: i32, start: i32, len: i32) {
-    WORD_SOURCES.with(|s| s.borrow_mut().push((offset as usize, start, len)));
+unsafe extern "C" fn collect_phone_source(
+    offset: i32,
+    start: i32,
+    len: i32,
+    letters_start: i32,
+    letters_len: i32,
+) {
+    PHONE_SOURCES.with(|s| {
+        s.borrow_mut().push(PhoneSource {
+            offset: offset as usize,
+            word: (start, len),
+            letters: (letters_start, letters_len),
+        })
+    });
 }
 
 unsafe extern "C" fn discard_audio(
@@ -485,12 +599,12 @@ unsafe extern "C" fn collect_clause(s: *const std::os::raw::c_char) -> std::os::
         let framed = unsafe {
             CStr::from_ptr(ffi::GetTranslatedPhonemeStringWithSource(
                 ffi::ESPEAK_PHONEMES_IPA | ((parse::PHONE_SEPARATOR as i32) << 8),
-                collect_word_source,
+                collect_phone_source,
             ))
         }
         .to_string_lossy()
         .into_owned();
-        let sources = WORD_SOURCES.with(|s| std::mem::take(&mut *s.borrow_mut()));
+        let sources = PHONE_SOURCES.with(|s| std::mem::take(&mut *s.borrow_mut()));
         CLAUSES.with(|c| {
             c.borrow_mut().push(Clause {
                 raw: line,

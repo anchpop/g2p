@@ -21,6 +21,11 @@ pub(crate) fn merge(labels: &mut Phonemized) {
                 && let Ok(long) = format!("{phone}ː").parse::<Phoneme>()
             {
                 labels.phonemes[i] = long;
+                // The long consonant was spoken from both halves' text.
+                if let Some(&(start, end)) = labels.phoneme_text_spans.get(i + 1) {
+                    let span = &mut labels.phoneme_text_spans[i];
+                    *span = (span.0.min(start), span.1.max(end));
+                }
                 keep[i + 1] = false;
                 i += 2;
             } else {
@@ -51,6 +56,7 @@ pub(crate) fn merge(labels: &mut Phonemized) {
     retain(&mut labels.stress, &keep);
     retain(&mut labels.tone, &keep);
     retain(&mut labels.pitch, &keep);
+    retain(&mut labels.phoneme_text_spans, &keep);
 }
 
 fn retain<T>(values: &mut Vec<T>, keep: &[bool]) {

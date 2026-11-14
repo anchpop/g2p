@@ -15,4 +15,8 @@ pub struct Labels {
     /// Original eojeol UTF-8 byte ranges; empty when alignment is uncertain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub word_text_spans: Vec<(usize, usize)>,
+    /// Original-input byte range of the syllable each phone was read from,
+    /// parallel to `phonemes`; empty when `word_text_spans` is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phoneme_text_spans: Vec<(usize, usize)>,
 }
